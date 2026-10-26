@@ -32,6 +32,7 @@
 #include <atomic>
 #include <chrono>
 #include <unordered_map>
+#include <unordered_set>
 #include <mutex>
 #include <filesystem>
 #include <fstream>
@@ -140,6 +141,173 @@ void TextureCache::DownloadImageMemory(ImageId image_id, bool sync) {
 }
 
 namespace {
+// Debug aid: NHLPORT_DUMP_TEXTURES=<dir> writes each unique uploaded texture (mip 0) as a .dds
+// file so UI textures such as player portraits can be found. NHLPORT_DUMP_MIN / NHLPORT_DUMP_MAX
+// limit the width/height range (defaults 64..1024).
+struct DumpConfig {
+    bool enabled{};
+    std::filesystem::path dir;
+    u32 min_dim{32};
+    u32 max_dim{2048};
+};
+
+const DumpConfig& GetDumpConfig() {
+    static const DumpConfig cfg = [] {
+        DumpConfig c;
+        if (const char* d = std::getenv("NHLPORT_DUMP_TEXTURES"); d && *d) {
+            c.enabled = true;
+            c.dir = d;
+            std::error_code ec;
+            std::filesystem::create_directories(c.dir, ec);
+        } else {
+            auto auto_dir = Common::FS::GetUserPath(Common::FS::PathType::UserDir) / "texture_dump";
+            std::error_code ec;
+            if (std::filesystem::is_directory(auto_dir, ec)) {
+                c.enabled = true;
+                c.dir = auto_dir;
+            }
+        }
+        if (const char* v = std::getenv("NHLPORT_DUMP_MIN"); v && *v) {
+            c.min_dim = static_cast<u32>(std::strtoul(v, nullptr, 10));
+        }
+        if (const char* v = std::getenv("NHLPORT_DUMP_MAX"); v && *v) {
+            c.max_dim = static_cast<u32>(std::strtoul(v, nullptr, 10));
+        }
+        return c;
+    }();
+    return cfg;
+}
+
+struct TextureOverrideEntry {
+    u32 width{};
+    u32 height{};
+    u32 mips{};
+    u32 dxgi{};
+    std::vector<u8> data;
+};
+
+struct TextureOverrideCfg {
+    bool enabled{false};
+    std::filesystem::path dir;
+    std::unordered_map<u64, TextureOverrideEntry> overrides;
+    std::unordered_set<u32> target_dims;
+};
+
+const TextureOverrideCfg& GetTextureOverrideCfg() {
+    static const TextureOverrideCfg cfg = [] {
+        TextureOverrideCfg c;
+        c.dir = Common::FS::GetUserPath(Common::FS::PathType::UserDir) / "texture_override";
+        std::error_code ec;
+        if (!std::filesystem::is_directory(c.dir, ec)) {
+            return c;
+        }
+        c.enabled = true;
+        for (const auto& entry : std::filesystem::directory_iterator(c.dir, ec)) {
+            if (!entry.is_regular_file(ec) || entry.path().extension() != ".dds") {
+                continue;
+            }
+            const std::string stem = entry.path().stem().string();
+            u64 hash = 0;
+            size_t last_underscore = stem.rfind('_');
+            std::string hash_str = (last_underscore != std::string::npos) ? stem.substr(last_underscore + 1) : stem;
+            if (hash_str.size() == 16 && hash_str.find_first_not_of("0123456789abcdefABCDEF") == std::string::npos) {
+                hash = std::strtoull(hash_str.c_str(), nullptr, 16);
+            }
+            if (hash == 0) {
+                continue;
+            }
+            std::ifstream in(entry.path(), std::ios::binary);
+            if (!in) {
+                continue;
+            }
+            std::vector<u8> file((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            if (file.size() < 128 || std::memcmp(file.data(), "DDS ", 4) != 0) {
+                continue;
+            }
+            u32 h = 0, w = 0, mips = 0;
+            std::memcpy(&h, file.data() + 12, 4);
+            std::memcpy(&w, file.data() + 16, 4);
+            std::memcpy(&mips, file.data() + 28, 4);
+            if (w == 0 || h == 0) {
+                continue;
+            }
+            if (mips == 0) mips = 1;
+
+            TextureOverrideEntry oe;
+            oe.width = w;
+            oe.height = h;
+            oe.mips = mips;
+
+            size_t data_offset = 128;
+            if (std::memcmp(file.data() + 84, "DX10", 4) == 0 && file.size() >= 148) {
+                data_offset = 148;
+                std::memcpy(&oe.dxgi, file.data() + 128, 4);
+            } else if (std::memcmp(file.data() + 84, "DXT1", 4) == 0) {
+                oe.dxgi = 71;
+            } else if (std::memcmp(file.data() + 84, "DXT5", 4) == 0) {
+                oe.dxgi = 77;
+            } else if (std::memcmp(file.data() + 84, "BC7", 3) == 0 || std::memcmp(file.data() + 84, "BC7U", 4) == 0) {
+                oe.dxgi = 98;
+            }
+
+            if (file.size() <= data_offset) {
+                continue;
+            }
+            oe.data.assign(file.begin() + data_offset, file.end());
+            c.target_dims.insert((w << 16) | h);
+            c.overrides[hash] = std::move(oe);
+            LOG_INFO(Render, "texture override loaded: hash {:016x} ({}x{}, mips {}, dxgi {}) from {}",
+                     hash, w, h, mips, oe.dxgi, entry.path().filename().string());
+        }
+        return c;
+    }();
+    return cfg;
+}
+
+u32 DxgiFormatFor(vk::Format f) {
+    switch (f) {
+    case vk::Format::eR8G8B8A8Unorm: return 28;
+    case vk::Format::eR8G8B8A8Srgb: return 29;
+    case vk::Format::eB8G8R8A8Unorm: return 87;
+    case vk::Format::eB8G8R8A8Srgb: return 91;
+    case vk::Format::eR8Unorm: return 61;
+    case vk::Format::eBc1RgbaUnormBlock: return 71;
+    case vk::Format::eBc1RgbUnormBlock: return 71;
+    case vk::Format::eBc1RgbaSrgbBlock: return 72;
+    case vk::Format::eBc1RgbSrgbBlock: return 72;
+    case vk::Format::eBc2UnormBlock: return 74;
+    case vk::Format::eBc2SrgbBlock: return 75;
+    case vk::Format::eBc3UnormBlock: return 77;
+    case vk::Format::eBc3SrgbBlock: return 78;
+    case vk::Format::eBc4UnormBlock: return 80;
+    case vk::Format::eBc5UnormBlock: return 83;
+    case vk::Format::eBc7UnormBlock: return 98;
+    case vk::Format::eBc7SrgbBlock: return 99;
+    default: return 0;
+    }
+}
+
+void WriteDds(const std::filesystem::path& path, u32 w, u32 h, u32 dxgi, bool block, u32 pitch_or_size,
+              const u8* data, size_t size) {
+    u32 hdr[32] = {};
+    hdr[0] = 0x20534444; // "DDS "
+    hdr[1] = 124;
+    hdr[2] = 0x1 | 0x2 | 0x4 | 0x1000 | (block ? 0x80000 : 0x8); // CAPS|HEIGHT|WIDTH|PIXELFORMAT|LINEARSIZE/PITCH
+    hdr[3] = h;
+    hdr[4] = w;
+    hdr[5] = pitch_or_size;
+    hdr[7] = 1; // mip count
+    hdr[19] = 32; // pixel format size
+    hdr[20] = 0x4; // DDPF_FOURCC
+    hdr[21] = 0x30315844; // "DX10"
+    hdr[27] = 0x1000; // DDSCAPS_TEXTURE
+    u32 dx10[5] = {dxgi, 3 /*TEXTURE2D*/, 0, 1, 0};
+    std::ofstream out(path, std::ios::binary);
+    out.write(reinterpret_cast<const char*>(hdr), 128);
+    out.write(reinterpret_cast<const char*>(dx10), sizeof(dx10));
+    out.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(size));
+}
+
 struct PortraitDds {
     bool ok{};
     std::vector<u8> data;
@@ -645,6 +813,183 @@ void TextureCache::ApplyPortraitOverride(Image& image) {
         portrait_state[info.guest_address].installed = 0xFFFFFFFFu;
     }
     InstallPortrait(image, DetectSelectedPlayerId(true));
+}
+
+void TextureCache::ApplyTextureOverride(Image& image) {
+    const auto& info = image.info;
+    if (info.props.is_depth || info.num_samples > 1 || info.resources.layers != 1 ||
+        info.props.is_volume || image.usage.render_target) {
+        return;
+    }
+    const auto& cfg = GetTextureOverrideCfg();
+    if (!cfg.enabled || cfg.overrides.empty()) {
+        return;
+    }
+    const u32 w = info.size.width;
+    const u32 h = info.size.height;
+    const bool is_ui_cand = (w <= 512 && h <= 512 && w >= 32 && h >= 32 && (w == h || (w == 256 && h == 512) || (w == 512 && h == 256)));
+    if (!is_ui_cand && cfg.target_dims.count((w << 16) | h) == 0) {
+        return;
+    }
+
+    const auto bx = vk::blockExtent(info.pixel_format)[0];
+    const auto by = vk::blockExtent(info.pixel_format)[1];
+    const u32 blocks_w = Common::DivCeil(w, u32(bx));
+    const u32 blocks_h = Common::DivCeil(h, u32(by));
+    const u32 bsize = vk::blockSize(info.pixel_format);
+    const u32 mip0_size = blocks_w * blocks_h * bsize;
+
+    const auto download = runtime.GetStagingPool().Request(mip0_size, MemoryType::HostCached, 16, false);
+    const vk::BufferImageCopy dl = {
+        .bufferOffset = download.offset,
+        .bufferRowLength = 0,
+        .bufferImageHeight = 0,
+        .imageSubresource = {.aspectMask = vk::ImageAspectFlagBits::eColor,
+                             .mipLevel = 0,
+                             .baseArrayLayer = 0,
+                             .layerCount = 1},
+        .imageOffset = {0, 0, 0},
+        .imageExtent = {w, h, 1},
+    };
+    scheduler.EndRendering();
+    runtime.DownloadImage(&image, download.buffer, std::span{&dl, 1});
+    scheduler.Finish();
+    download.Invalidate();
+
+    const u8* data = reinterpret_cast<const u8*>(download.mapped);
+    const u64 hash = XXH3_64bits(data, mip0_size);
+
+    if (is_ui_cand) {
+        LOG_INFO(Render, "UI tex {}x{} format {} hash {:016x} (override: {})", w, h, vk::to_string(info.pixel_format), hash, cfg.overrides.count(hash) != 0);
+    }
+
+    auto it = cfg.overrides.find(hash);
+    if (it == cfg.overrides.end()) {
+        return;
+    }
+
+    const auto& oe = it->second;
+    LOG_INFO(Render, "Applying texture override for hash {:016x} ({}x{})", hash, w, h);
+
+    const u32 levels = std::min<u32>(oe.mips, info.resources.levels);
+    SmallVector<vk::BufferImageCopy, 12> copies;
+    u64 total = 0;
+    for (u32 m = 0; m < levels; ++m) {
+        const u32 mw = std::max(w >> m, 1u);
+        const u32 mh = std::max(h >> m, 1u);
+        const u32 mbw = Common::DivCeil(mw, u32(bx));
+        const u32 mbh = Common::DivCeil(mh, u32(by));
+        const u64 msize = u64(mbw) * mbh * bsize;
+        if (total + msize > oe.data.size()) {
+            break;
+        }
+        copies.push_back({
+            .bufferOffset = total,
+            .bufferRowLength = 0,
+            .bufferImageHeight = 0,
+            .imageSubresource = {.aspectMask = vk::ImageAspectFlagBits::eColor,
+                                 .mipLevel = m,
+                                 .baseArrayLayer = 0,
+                                 .layerCount = 1},
+            .imageOffset = {0, 0, 0},
+            .imageExtent = {mw, mh, 1},
+        });
+        total += msize;
+    }
+    if (copies.empty()) {
+        return;
+    }
+    const auto staging =
+        runtime.GetStagingPool().Request(total, MemoryType::HostUncached, 16, false);
+    std::memcpy(staging.mapped, oe.data.data(), total);
+    staging.buffer->Flush(staging.offset, total);
+    for (auto& c : copies) {
+        c.bufferOffset += staging.offset;
+    }
+    scheduler.EndRendering();
+    runtime.UploadImage(&image, staging.buffer, copies);
+    LOG_INFO(Render, "Successfully replaced texture {:016x} ({} mips uploaded)", hash, copies.size());
+}
+
+void TextureCache::DumpImageToDisk(Image& image) {
+    // NHLPORT_PORTRAIT_CTX=<dir>: for 512x340 BC3 (player portrait) uploads, save the guest memory
+    // around the texture so the player id / name that selected it can be searched for offline.
+    if (const char* ctx_dir = std::getenv("NHLPORT_PORTRAIT_CTX"); ctx_dir && *ctx_dir) {
+        const auto& pi = image.info;
+        static std::atomic<u32> ctx_count{0};
+        if (pi.size.width == 512 && pi.size.height == 340 &&
+            pi.pixel_format == vk::Format::eBc3UnormBlock && ctx_count.load() < 24) {
+            constexpr u64 kPad = 0x40000;
+            const VAddr lo = pi.guest_address > kPad ? pi.guest_address - kPad : pi.guest_address;
+            const VAddr hi = pi.guest_address + pi.guest_size + kPad;
+            auto* mem = Core::Memory::Instance();
+            if (mem->IsValidMapping(lo, hi - lo)) {
+                std::error_code ec;
+                std::filesystem::create_directories(ctx_dir, ec);
+                const auto name = fmt::format("ctx_{}_a{:x}_off{:x}.bin", ctx_count.fetch_add(1),
+                                              pi.guest_address, pi.guest_address - lo);
+                std::ofstream out(std::filesystem::path(ctx_dir) / name, std::ios::binary);
+                out.write(reinterpret_cast<const char*>(lo), static_cast<std::streamsize>(hi - lo));
+            }
+        }
+    }
+    const DumpConfig& cfg = GetDumpConfig();
+    if (!cfg.enabled) {
+        return;
+    }
+    const auto& info = image.info;
+    if (info.props.is_depth || info.num_samples > 1 || info.resources.layers != 1 ||
+        info.props.is_volume || image.usage.render_target) {
+        return;
+    }
+    const u32 w = info.size.width;
+    const u32 h = info.size.height;
+    if (w < cfg.min_dim || h < cfg.min_dim || w > cfg.max_dim || h > cfg.max_dim) {
+        return;
+    }
+    const u32 dxgi = DxgiFormatFor(info.pixel_format);
+    if (dxgi == 0) {
+        return;
+    }
+    const auto bx = vk::blockExtent(info.pixel_format)[0];
+    const auto by = vk::blockExtent(info.pixel_format)[1];
+    const bool block = bx > 1;
+    const u32 blocks_w = Common::DivCeil(w, u32(bx));
+    const u32 blocks_h = Common::DivCeil(h, u32(by));
+    const u32 bsize = vk::blockSize(info.pixel_format);
+    const u32 size = blocks_w * blocks_h * bsize;
+
+    const auto download = runtime.GetStagingPool().Request(size, MemoryType::HostCached, 16, false);
+    const vk::BufferImageCopy copy = {
+        .bufferOffset = download.offset,
+        .bufferRowLength = 0,
+        .bufferImageHeight = 0,
+        .imageSubresource = {.aspectMask = vk::ImageAspectFlagBits::eColor,
+                             .mipLevel = 0,
+                             .baseArrayLayer = 0,
+                             .layerCount = 1},
+        .imageOffset = {0, 0, 0},
+        .imageExtent = {w, h, 1},
+    };
+    scheduler.EndRendering();
+    runtime.DownloadImage(&image, download.buffer, std::span{&copy, 1});
+    scheduler.Finish();
+    download.Invalidate();
+
+    const u8* data = reinterpret_cast<const u8*>(download.mapped);
+    const u64 hash = XXH3_64bits(data, size);
+    {
+        static std::mutex mtx;
+        static std::unordered_set<u64> seen;
+        std::scoped_lock lk{mtx};
+        if (!seen.insert(hash).second) {
+            return;
+        }
+    }
+    const std::string name = fmt::format("{}x{}_{}_{:016x}_a{:x}.dds", w, h, vk::to_string(info.pixel_format),
+                                         hash, info.guest_address);
+    LOG_INFO(Render, "Dumped texture: {}", name);
+    WriteDds(cfg.dir / name, w, h, dxgi, block, block ? blocks_w * blocks_h * bsize : w * (bsize), data, size);
 }
 
 void TextureCache::MarkAsMaybeDirty(ImageId image_id, Image& image) {
@@ -1250,6 +1595,8 @@ ImageId TextureCache::ExpandImage(const ImageInfo& info, ImageId image_id) {
 
     RefreshImage(new_image);
     runtime.CopyImage(&src_image, &new_image);
+    ApplyTextureOverride(new_image);
+    DumpImageToDisk(new_image);
 
     if (src_image.binding.is_bound || src_image.binding.is_target) {
         src_image.binding.needs_rebind = 1u;
@@ -1606,6 +1953,8 @@ void TextureCache::RefreshImage(Image& image) {
     Diag::C::tc_refresh_bytes.fetch_add(image.info.guest_size, std::memory_order_relaxed);
     runtime.UploadImage(&image, buffer, image_copies);
     ApplyPortraitOverride(image);
+    ApplyTextureOverride(image);
+    DumpImageToDisk(image);
 }
 
 vk::Sampler TextureCache::GetSampler(const AmdGpu::Sampler& sharp,

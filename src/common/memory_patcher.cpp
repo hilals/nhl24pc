@@ -14,6 +14,17 @@
 #include "core/emulator_state.h"
 #include "core/file_format/psf.h"
 #include "memory_patcher.h"
+#include "common/types.h"
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace MemoryPatcher {
 
@@ -220,6 +231,167 @@ void ApplyPatchesFromXML(std::filesystem::path path) {
     }
 }
 
+typedef void (PS4_SYSV_ABI *UIInsertFn)(void* map, const char* key, const char* val);
+static UIInsertFn s_orig_ui_insert = nullptr;
+
+static inline bool StrEqualsIgnoreCase(const char* a, const char* b) {
+    if (a == b) return true;
+    if (!a || !b) return false;
+    while (*a && *b) {
+        char ca = (*a >= 'A' && *a <= 'Z') ? static_cast<char>(*a + ('a' - 'A')) : *a;
+        char cb = (*b >= 'A' && *b <= 'Z') ? static_cast<char>(*b + ('a' - 'A')) : *b;
+        if (ca != cb) return false;
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+static void PS4_SYSV_ABI Hook_UIInsert(void* map, const char* key, const char* val) {
+    if (key != nullptr && reinterpret_cast<uintptr_t>(key) >= 0x10000) {
+        const char* orig_val = val;
+        if (StrEqualsIgnoreCase(key, "TeamCity") || StrEqualsIgnoreCase(key, "CityName") ||
+            StrEqualsIgnoreCase(key, "CategoryName") || StrEqualsIgnoreCase(key, "FranchiseCategory") ||
+            StrEqualsIgnoreCase(key, "City") || StrEqualsIgnoreCase(key, "TeamCityName") ||
+            StrEqualsIgnoreCase(key, "TeamNameLine1") || StrEqualsIgnoreCase(key, "UserTeamNameLine1") ||
+            StrEqualsIgnoreCase(key, "FranchiseTeamNameLine1") || StrEqualsIgnoreCase(key, "OpponentTeamNameLine1") ||
+            StrEqualsIgnoreCase(key, "NameLine1") || StrEqualsIgnoreCase(key, "Line1Name") ||
+            StrEqualsIgnoreCase(key, "Team_Line1Name") || StrEqualsIgnoreCase(key, "Line1")) {
+            if (!val || val[0] == '\0' || StrEqualsIgnoreCase(val, "Arizona")) {
+                val = "Utah";
+            }
+        } else if (StrEqualsIgnoreCase(key, "TeamFullName") || StrEqualsIgnoreCase(key, "FullName")) {
+            if (!val || val[0] == '\0' || StrEqualsIgnoreCase(val, "Arizona Coyotes")) {
+                val = "Utah Mammoth";
+            }
+        } else if (StrEqualsIgnoreCase(key, "TeamName") || StrEqualsIgnoreCase(key, "TeamNameLine2") ||
+                   StrEqualsIgnoreCase(key, "UserTeamNameLine2") || StrEqualsIgnoreCase(key, "FranchiseTeamNameLine2") ||
+                   StrEqualsIgnoreCase(key, "OpponentTeamNameLine2") || StrEqualsIgnoreCase(key, "NameLine2") ||
+                   StrEqualsIgnoreCase(key, "Line2Name") || StrEqualsIgnoreCase(key, "Team_Line2Name") ||
+                   StrEqualsIgnoreCase(key, "teamLine2Name") || StrEqualsIgnoreCase(key, "Line2") ||
+                   StrEqualsIgnoreCase(key, "TeamNickname") || StrEqualsIgnoreCase(key, "NickName") ||
+                   StrEqualsIgnoreCase(key, "Nickname")) {
+            if (!val || val[0] == '\0' || StrEqualsIgnoreCase(val, "Coyotes")) {
+                val = "Mammoth";
+            }
+        } else if (StrEqualsIgnoreCase(key, "TeamAbbrName") || StrEqualsIgnoreCase(key, "AbbrName") ||
+                   StrEqualsIgnoreCase(key, "TeamAbbreviation") || StrEqualsIgnoreCase(key, "TeamAbbr") ||
+                   StrEqualsIgnoreCase(key, "Abbreviation")) {
+            if (!val || val[0] == '\0' || StrEqualsIgnoreCase(val, "PHX") ||
+                StrEqualsIgnoreCase(val, "ARZ") || StrEqualsIgnoreCase(val, "ARI")) {
+                val = "UTA";
+            }
+        } else if (StrEqualsIgnoreCase(key, "TileName")) {
+            if (StrEqualsIgnoreCase(val, "Arizona")) {
+                val = "Utah";
+            }
+        } else if (StrEqualsIgnoreCase(key, "ArenaName") || StrEqualsIgnoreCase(key, "StadiumName") ||
+                   StrEqualsIgnoreCase(key, "VenueName") || StrEqualsIgnoreCase(key, "Arena") ||
+                   StrEqualsIgnoreCase(key, "Stadium") || StrEqualsIgnoreCase(key, "Venue")) {
+            if (!val || val[0] == '\0' || StrEqualsIgnoreCase(val, "Arizona Arena")) {
+                val = "Delta Center";
+            }
+        } else if (StrEqualsIgnoreCase(key, "ArenaCity") || StrEqualsIgnoreCase(key, "StadiumCity") ||
+                   StrEqualsIgnoreCase(key, "VenueCity") || StrEqualsIgnoreCase(key, "ArenaLocation") ||
+                   StrEqualsIgnoreCase(key, "StadiumLocation")) {
+            if (!val || val[0] == '\0' || StrEqualsIgnoreCase(val, "Tempe, AZ") || StrEqualsIgnoreCase(val, "Tempe")) {
+                val = "Delta Center, UT";
+            }
+        }
+
+        if (val != nullptr && reinterpret_cast<uintptr_t>(val) >= 0x10000) {
+            if (StrEqualsIgnoreCase(val, "Arizona Arena")) {
+                val = "Delta Center";
+            } else if (StrEqualsIgnoreCase(val, "Tempe, AZ")) {
+                val = "Delta Center, UT";
+            } else if (StrEqualsIgnoreCase(val, "ARIZONA ARENA TEMPE, AZ") ||
+                       StrEqualsIgnoreCase(val, "ARIZONA ARENA  TEMPE, AZ") ||
+                       StrEqualsIgnoreCase(val, "Arizona Arena, Tempe, AZ")) {
+                val = "DELTA CENTER, UT";
+            }
+        }
+        if (val != orig_val) {
+            LOG_INFO(Loader, "UIInsert override: key='{}', val='{}' -> '{}'",
+                     key, orig_val ? orig_val : "<null>", val);
+        }
+    }
+    s_orig_ui_insert(map, key, val);
+}
+
+static void InstallUtahBrandingHook() {
+#ifdef _WIN32
+    if (g_game_serial != "CUSA37933" && !g_game_serial.empty()) {
+        return;
+    }
+    if (g_eboot_address == 0) {
+        return;
+    }
+
+    uintptr_t target = g_eboot_address + 0x256cab0;
+    static const uint8_t expected_prologue[17] = {
+        0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56,
+        0x41, 0x55, 0x41, 0x54, 0x53, 0x48, 0x83, 0xec, 0x28
+    };
+
+    if (std::memcmp(reinterpret_cast<const void*>(target), expected_prologue, sizeof(expected_prologue)) != 0) {
+        LOG_WARNING(Loader, "Utah branding hook: prologue mismatch at {:#x}, skipping hook", target);
+        return;
+    }
+
+    // Allocate executable trampoline buffer
+    uint8_t* trampoline = static_cast<uint8_t*>(
+        VirtualAlloc(nullptr, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE)
+    );
+    if (!trampoline) {
+        LOG_ERROR(Loader, "Utah branding hook: failed to allocate trampoline memory");
+        return;
+    }
+
+    // Copy stolen 17 bytes to trampoline
+    std::memcpy(trampoline, reinterpret_cast<const void*>(target), 17);
+
+    // Append 14-byte 64-bit indirect jump back to target + 17
+    trampoline[17] = 0xFF;
+    trampoline[18] = 0x25;
+    trampoline[19] = 0x00;
+    trampoline[20] = 0x00;
+    trampoline[21] = 0x00;
+    trampoline[22] = 0x00;
+    uint64_t ret_addr = static_cast<uint64_t>(target + 17);
+    std::memcpy(&trampoline[23], &ret_addr, sizeof(ret_addr));
+
+    FlushInstructionCache(GetCurrentProcess(), trampoline, 31);
+    s_orig_ui_insert = reinterpret_cast<UIInsertFn>(trampoline);
+
+    // Overwrite target with 14-byte 64-bit jump to Hook_UIInsert + 3 NOPs
+    DWORD old_protect;
+    if (!VirtualProtect(reinterpret_cast<void*>(target), 17, PAGE_EXECUTE_READWRITE, &old_protect)) {
+        LOG_ERROR(Loader, "Utah branding hook: VirtualProtect failed at target");
+        return;
+    }
+
+    uint8_t jump_code[17];
+    jump_code[0] = 0xFF;
+    jump_code[1] = 0x25;
+    jump_code[2] = 0x00;
+    jump_code[3] = 0x00;
+    jump_code[4] = 0x00;
+    jump_code[5] = 0x00;
+    uint64_t hook_addr = reinterpret_cast<uint64_t>(&Hook_UIInsert);
+    std::memcpy(&jump_code[6], &hook_addr, sizeof(hook_addr));
+    jump_code[14] = 0x90;
+    jump_code[15] = 0x90;
+    jump_code[16] = 0x90;
+
+    std::memcpy(reinterpret_cast<void*>(target), jump_code, sizeof(jump_code));
+    VirtualProtect(reinterpret_cast<void*>(target), 17, old_protect, &old_protect);
+    FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(target), 17);
+
+    LOG_INFO(Loader, "Utah branding hook successfully installed at target {:#x} -> trampoline {:#x}",
+             target, reinterpret_cast<uintptr_t>(trampoline));
+#endif
+}
+
 void OnGameLoaded() {
     std::filesystem::path patch_dir = Common::FS::GetUserPath(Common::FS::PathType::PatchesDir);
     if (!patch_file.empty()) {
@@ -273,6 +445,7 @@ void OnGameLoaded() {
         }
     }
     ApplyPendingPatches();
+    InstallUtahBrandingHook();
 }
 
 void AddPatchToQueue(const patchInfo& patchToAdd) {
