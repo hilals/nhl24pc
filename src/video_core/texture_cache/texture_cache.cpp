@@ -861,6 +861,8 @@ void TextureCache::ApplyTextureOverride(Image& image) {
 
     if (is_ui_cand) {
         LOG_INFO(Render, "UI tex {}x{} format {} hash {:016x} (override: {})", w, h, vk::to_string(info.pixel_format), hash, cfg.overrides.count(hash) != 0);
+    } else {
+        LOG_INFO(Render, "Gear/Jersey tex {}x{} format {} hash {:016x} (override: {})", w, h, vk::to_string(info.pixel_format), hash, cfg.overrides.count(hash) != 0);
     }
 
     auto it = cfg.overrides.find(hash);

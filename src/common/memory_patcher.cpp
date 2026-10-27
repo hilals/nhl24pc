@@ -260,11 +260,11 @@ static void PS4_SYSV_ABI Hook_UIInsert(void* map, const char* key, const char* v
             StrEqualsIgnoreCase(key, "FranchiseTeamNameLine1") || StrEqualsIgnoreCase(key, "OpponentTeamNameLine1") ||
             StrEqualsIgnoreCase(key, "NameLine1") || StrEqualsIgnoreCase(key, "Line1Name") ||
             StrEqualsIgnoreCase(key, "Team_Line1Name") || StrEqualsIgnoreCase(key, "Line1")) {
-            if (!val || val[0] == '\0' || StrEqualsIgnoreCase(val, "Arizona")) {
+            if (val && StrEqualsIgnoreCase(val, "Arizona")) {
                 val = "Utah";
             }
         } else if (StrEqualsIgnoreCase(key, "TeamFullName") || StrEqualsIgnoreCase(key, "FullName")) {
-            if (!val || val[0] == '\0' || StrEqualsIgnoreCase(val, "Arizona Coyotes")) {
+            if (val && StrEqualsIgnoreCase(val, "Arizona Coyotes")) {
                 val = "Utah Mammoth";
             }
         } else if (StrEqualsIgnoreCase(key, "TeamName") || StrEqualsIgnoreCase(key, "TeamNameLine2") ||
@@ -274,14 +274,13 @@ static void PS4_SYSV_ABI Hook_UIInsert(void* map, const char* key, const char* v
                    StrEqualsIgnoreCase(key, "teamLine2Name") || StrEqualsIgnoreCase(key, "Line2") ||
                    StrEqualsIgnoreCase(key, "TeamNickname") || StrEqualsIgnoreCase(key, "NickName") ||
                    StrEqualsIgnoreCase(key, "Nickname")) {
-            if (!val || val[0] == '\0' || StrEqualsIgnoreCase(val, "Coyotes")) {
+            if (val && StrEqualsIgnoreCase(val, "Coyotes")) {
                 val = "Mammoth";
             }
         } else if (StrEqualsIgnoreCase(key, "TeamAbbrName") || StrEqualsIgnoreCase(key, "AbbrName") ||
                    StrEqualsIgnoreCase(key, "TeamAbbreviation") || StrEqualsIgnoreCase(key, "TeamAbbr") ||
                    StrEqualsIgnoreCase(key, "Abbreviation")) {
-            if (!val || val[0] == '\0' || StrEqualsIgnoreCase(val, "PHX") ||
-                StrEqualsIgnoreCase(val, "ARZ") || StrEqualsIgnoreCase(val, "ARI")) {
+            if (val && (StrEqualsIgnoreCase(val, "PHX") || StrEqualsIgnoreCase(val, "ARZ") || StrEqualsIgnoreCase(val, "ARI"))) {
                 val = "UTA";
             }
         } else if (StrEqualsIgnoreCase(key, "TileName")) {
@@ -291,13 +290,13 @@ static void PS4_SYSV_ABI Hook_UIInsert(void* map, const char* key, const char* v
         } else if (StrEqualsIgnoreCase(key, "ArenaName") || StrEqualsIgnoreCase(key, "StadiumName") ||
                    StrEqualsIgnoreCase(key, "VenueName") || StrEqualsIgnoreCase(key, "Arena") ||
                    StrEqualsIgnoreCase(key, "Stadium") || StrEqualsIgnoreCase(key, "Venue")) {
-            if (!val || val[0] == '\0' || StrEqualsIgnoreCase(val, "Arizona Arena")) {
+            if (val && StrEqualsIgnoreCase(val, "Arizona Arena")) {
                 val = "Delta Center";
             }
         } else if (StrEqualsIgnoreCase(key, "ArenaCity") || StrEqualsIgnoreCase(key, "StadiumCity") ||
                    StrEqualsIgnoreCase(key, "VenueCity") || StrEqualsIgnoreCase(key, "ArenaLocation") ||
                    StrEqualsIgnoreCase(key, "StadiumLocation")) {
-            if (!val || val[0] == '\0' || StrEqualsIgnoreCase(val, "Tempe, AZ") || StrEqualsIgnoreCase(val, "Tempe")) {
+            if (val && (StrEqualsIgnoreCase(val, "Tempe, AZ") || StrEqualsIgnoreCase(val, "Tempe"))) {
                 val = "Delta Center, UT";
             }
         }
