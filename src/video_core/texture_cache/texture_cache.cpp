@@ -602,10 +602,17 @@ struct PortraitState {
     u64 settle_until{0};
     u32 settle_gen{0};
     bool need_rescan{false};
+    // Uploaded together with other player portraits (team select, lines): the picture there belongs
+    // to a roster player, not to the "open player" record, so the game's own silhouette is kept.
+    bool multi{false};
 };
 std::mutex portrait_state_mtx;
 std::unordered_map<VAddr, PortraitState> portrait_state;
 PortraitDds portrait_original; // the unmodified silhouette, captured on first sight
+u64 last_portrait_upload_frame{0};      // guarded by portrait_state_mtx
+u64 recent_silhouette_frame{0};         // guarded by portrait_state_mtx
+std::vector<VAddr> recent_silhouettes;  // guarded by portrait_state_mtx
+constexpr u64 kPortraitBatchFrames = 3;
 } // namespace
 
 void TextureCache::InstallPortrait(Image& image, u32 player_id) {
@@ -691,6 +698,7 @@ void TextureCache::RefreshPortraitOnBind(Image& image) {
     u64 settle_until;
     u32 settle_gen;
     bool need_rescan;
+    bool multi;
     {
         std::scoped_lock lk{portrait_state_mtx};
         const auto it = portrait_state.find(info.guest_address);
@@ -698,6 +706,7 @@ void TextureCache::RefreshPortraitOnBind(Image& image) {
             return;
         }
         auto& st = it->second;
+        multi = st.multi;
         if (st.installed != 0xFFFFFFFFu && st.last_frame + 20 < frame) {
             st.settle_until = frame + 30;
             st.settle_gen = selection_generation.load();
@@ -708,6 +717,12 @@ void TextureCache::RefreshPortraitOnBind(Image& image) {
         settle_until = st.settle_until;
         settle_gen = st.settle_gen;
         need_rescan = st.need_rescan;
+    }
+    if (multi) {
+        if (installed != 0) {
+            InstallPortrait(image, 0);
+        }
+        return;
     }
     u32 id = DetectSelectedPlayerId(false);
     const bool unchanged = selection_generation.load() == settle_gen;
@@ -769,6 +784,27 @@ void TextureCache::ApplyPortraitOverride(Image& image) {
     if (logged.fetch_add(1) < 64) {
         LOG_INFO(Render, "portrait upload hash {:016x} {}", hash, match ? "-> silhouette" : "(kept)");
     }
+    // Several portraits uploaded within a few frames = a multi-player screen (team select, lines).
+    const u64 upload_frame = VideoCore::Perf::gpu_frame.load(std::memory_order_relaxed);
+    bool multi = false;
+    {
+        std::scoped_lock lk{portrait_state_mtx};
+        multi = last_portrait_upload_frame != 0 &&
+                upload_frame <= last_portrait_upload_frame + kPortraitBatchFrames;
+        last_portrait_upload_frame = upload_frame;
+        if (upload_frame > recent_silhouette_frame + kPortraitBatchFrames) {
+            recent_silhouettes.clear();
+        }
+        if (multi) {
+            for (const VAddr a : recent_silhouettes) {
+                const auto it = portrait_state.find(a);
+                if (it != portrait_state.end() && !it->second.multi) {
+                    it->second.multi = true;
+                    LOG_INFO(Render, "portrait: silhouette {:x} is on a multi-player screen", a);
+                }
+            }
+        }
+    }
     if (!match) {
         std::scoped_lock lk{portrait_state_mtx};
         portrait_state.erase(info.guest_address);
@@ -810,9 +846,13 @@ void TextureCache::ApplyPortraitOverride(Image& image) {
     }
     {
         std::scoped_lock lk{portrait_state_mtx};
-        portrait_state[info.guest_address].installed = 0xFFFFFFFFu;
+        auto& st = portrait_state[info.guest_address];
+        st.installed = 0xFFFFFFFFu;
+        st.multi = multi;
+        recent_silhouettes.push_back(info.guest_address);
+        recent_silhouette_frame = upload_frame;
     }
-    InstallPortrait(image, DetectSelectedPlayerId(true));
+    InstallPortrait(image, multi ? 0 : DetectSelectedPlayerId(true));
 }
 
 void TextureCache::ApplyTextureOverride(Image& image) {

@@ -250,9 +250,30 @@ static inline bool StrEqualsIgnoreCase(const char* a, const char* b) {
     return *a == *b;
 }
 
+static thread_local void* s_current_team_map = nullptr;
+static thread_local bool s_current_team_is_utah = false;
+
 static void PS4_SYSV_ABI Hook_UIInsert(void* map, const char* key, const char* val) {
     if (key != nullptr && reinterpret_cast<uintptr_t>(key) >= 0x10000) {
+        if (map != s_current_team_map) {
+            s_current_team_map = map;
+            s_current_team_is_utah = false;
+        }
+
+        // If val indicates Arizona or Utah Mammoth, mark this map dictionary as Utah
+        if (val != nullptr && reinterpret_cast<uintptr_t>(val) >= 0x10000) {
+            if (StrEqualsIgnoreCase(val, "Arizona") || StrEqualsIgnoreCase(val, "Utah") ||
+                StrEqualsIgnoreCase(val, "Coyotes") || StrEqualsIgnoreCase(val, "Mammoth") ||
+                StrEqualsIgnoreCase(val, "Arizona Coyotes") || StrEqualsIgnoreCase(val, "Utah Mammoth") ||
+                StrEqualsIgnoreCase(val, "ARZ") || StrEqualsIgnoreCase(val, "ARI") ||
+                StrEqualsIgnoreCase(val, "PHX") || StrEqualsIgnoreCase(val, "UTA")) {
+                s_current_team_is_utah = true;
+            }
+        }
+
         const char* orig_val = val;
+        const bool allow_empty = s_current_team_is_utah && (!val || val[0] == '\0');
+
         if (StrEqualsIgnoreCase(key, "TeamCity") || StrEqualsIgnoreCase(key, "CityName") ||
             StrEqualsIgnoreCase(key, "CategoryName") || StrEqualsIgnoreCase(key, "FranchiseCategory") ||
             StrEqualsIgnoreCase(key, "City") || StrEqualsIgnoreCase(key, "TeamCityName") ||
@@ -260,12 +281,14 @@ static void PS4_SYSV_ABI Hook_UIInsert(void* map, const char* key, const char* v
             StrEqualsIgnoreCase(key, "FranchiseTeamNameLine1") || StrEqualsIgnoreCase(key, "OpponentTeamNameLine1") ||
             StrEqualsIgnoreCase(key, "NameLine1") || StrEqualsIgnoreCase(key, "Line1Name") ||
             StrEqualsIgnoreCase(key, "Team_Line1Name") || StrEqualsIgnoreCase(key, "Line1")) {
-            if (val && StrEqualsIgnoreCase(val, "Arizona")) {
+            if (allow_empty || (val && StrEqualsIgnoreCase(val, "Arizona"))) {
                 val = "Utah";
+                s_current_team_is_utah = true;
             }
         } else if (StrEqualsIgnoreCase(key, "TeamFullName") || StrEqualsIgnoreCase(key, "FullName")) {
-            if (val && StrEqualsIgnoreCase(val, "Arizona Coyotes")) {
+            if (allow_empty || (val && StrEqualsIgnoreCase(val, "Arizona Coyotes"))) {
                 val = "Utah Mammoth";
+                s_current_team_is_utah = true;
             }
         } else if (StrEqualsIgnoreCase(key, "TeamName") || StrEqualsIgnoreCase(key, "TeamNameLine2") ||
                    StrEqualsIgnoreCase(key, "UserTeamNameLine2") || StrEqualsIgnoreCase(key, "FranchiseTeamNameLine2") ||
@@ -274,29 +297,33 @@ static void PS4_SYSV_ABI Hook_UIInsert(void* map, const char* key, const char* v
                    StrEqualsIgnoreCase(key, "teamLine2Name") || StrEqualsIgnoreCase(key, "Line2") ||
                    StrEqualsIgnoreCase(key, "TeamNickname") || StrEqualsIgnoreCase(key, "NickName") ||
                    StrEqualsIgnoreCase(key, "Nickname")) {
-            if (val && StrEqualsIgnoreCase(val, "Coyotes")) {
+            if (allow_empty || (val && StrEqualsIgnoreCase(val, "Coyotes"))) {
                 val = "Mammoth";
+                s_current_team_is_utah = true;
             }
         } else if (StrEqualsIgnoreCase(key, "TeamAbbrName") || StrEqualsIgnoreCase(key, "AbbrName") ||
                    StrEqualsIgnoreCase(key, "TeamAbbreviation") || StrEqualsIgnoreCase(key, "TeamAbbr") ||
                    StrEqualsIgnoreCase(key, "Abbreviation")) {
-            if (val && (StrEqualsIgnoreCase(val, "PHX") || StrEqualsIgnoreCase(val, "ARZ") || StrEqualsIgnoreCase(val, "ARI"))) {
+            if (allow_empty || (val && (StrEqualsIgnoreCase(val, "PHX") ||
+                StrEqualsIgnoreCase(val, "ARZ") || StrEqualsIgnoreCase(val, "ARI")))) {
                 val = "UTA";
+                s_current_team_is_utah = true;
             }
         } else if (StrEqualsIgnoreCase(key, "TileName")) {
             if (StrEqualsIgnoreCase(val, "Arizona")) {
                 val = "Utah";
+                s_current_team_is_utah = true;
             }
         } else if (StrEqualsIgnoreCase(key, "ArenaName") || StrEqualsIgnoreCase(key, "StadiumName") ||
                    StrEqualsIgnoreCase(key, "VenueName") || StrEqualsIgnoreCase(key, "Arena") ||
                    StrEqualsIgnoreCase(key, "Stadium") || StrEqualsIgnoreCase(key, "Venue")) {
-            if (val && StrEqualsIgnoreCase(val, "Arizona Arena")) {
+            if (allow_empty || (val && StrEqualsIgnoreCase(val, "Arizona Arena"))) {
                 val = "Delta Center";
             }
         } else if (StrEqualsIgnoreCase(key, "ArenaCity") || StrEqualsIgnoreCase(key, "StadiumCity") ||
                    StrEqualsIgnoreCase(key, "VenueCity") || StrEqualsIgnoreCase(key, "ArenaLocation") ||
                    StrEqualsIgnoreCase(key, "StadiumLocation")) {
-            if (val && (StrEqualsIgnoreCase(val, "Tempe, AZ") || StrEqualsIgnoreCase(val, "Tempe"))) {
+            if (allow_empty || (val && (StrEqualsIgnoreCase(val, "Tempe, AZ") || StrEqualsIgnoreCase(val, "Tempe")))) {
                 val = "Delta Center, UT";
             }
         }
