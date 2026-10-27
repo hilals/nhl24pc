@@ -15,6 +15,9 @@
 #include "core/file_format/psf.h"
 #include "memory_patcher.h"
 #include "common/types.h"
+#include "core/memory.h"
+#include <thread>
+#include <atomic>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -392,6 +395,86 @@ static void InstallUtahBrandingHook() {
 #endif
 }
 
+
+static bool ScanAndPatchUtahUniforms() {
+    auto* mem = Core::Memory::Instance();
+    if (!mem) return false;
+
+    static const uint8_t sig403[8] = {0x6e, 0x58, 0x40, 0x37, 0x28, 0x03, 0x01, 0x00};
+    static const uint8_t sig457[8] = {0x7e, 0x58, 0x40, 0x3f, 0x94, 0x03, 0x01, 0x00};
+    static const uint8_t sig635[8] = {0x7e, 0x58, 0x40, 0x3f, 0xf8, 0x04, 0x01, 0x00};
+
+    constexpr size_t stride_457 = (457 - 403) * 172;
+    constexpr size_t stride_635 = (635 - 403) * 172;
+    constexpr size_t required_span = stride_635 + 172;
+
+    bool patched = false;
+
+    mem->ForEachReadableRange([&](VAddr base, u64 size) {
+        if (size < required_span) return;
+        const uint8_t* p = reinterpret_cast<const uint8_t*>(base);
+        const uint8_t* end = p + size - required_span;
+
+        for (const uint8_t* cur = p; cur <= end; ++cur) {
+            if (cur[0] == 0x6e && std::memcmp(cur, sig403, 8) == 0) {
+                if (std::memcmp(cur + stride_457, sig457, 8) == 0 &&
+                    std::memcmp(cur + stride_635, sig635, 8) == 0) {
+
+                    if (cur[8] == 0xf0 && cur[9] == 0x28 &&
+                        cur[stride_457 + 8] == 0xf0 && cur[stride_457 + 9] == 0xe0 &&
+                        cur[stride_635 + 8] == 0xf0 && cur[stride_635 + 9] == 0x28) {
+                        patched = true;
+                        continue;
+                    }
+
+                    uint8_t* target = const_cast<uint8_t*>(cur);
+#ifdef _WIN32
+                    DWORD old_protect;
+                    if (VirtualProtect(target, required_span, PAGE_EXECUTE_READWRITE, &old_protect)) {
+                        target[8] = 0xf0;
+                        target[9] = 0x28;
+
+                        target[stride_457 + 8] = 0xf0;
+                        target[stride_457 + 9] = 0xe0;
+
+                        target[stride_635 + 8] = 0xf0;
+                        target[stride_635 + 9] = 0x28;
+
+                        VirtualProtect(target, required_span, old_protect, &old_protect);
+                        LOG_INFO(Loader, "Utah uniform patch: successfully forced in-memory yUAn JOlt=120 at {:#x}",
+                                 reinterpret_cast<uintptr_t>(target));
+                        patched = true;
+                    }
+#else
+                    target[8] = 0xf0;
+                    target[9] = 0x28;
+                    target[stride_457 + 8] = 0xf0;
+                    target[stride_457 + 9] = 0xe0;
+                    target[stride_635 + 8] = 0xf0;
+                    target[stride_635 + 9] = 0x28;
+                    patched = true;
+#endif
+                }
+            }
+        }
+    });
+
+    return patched;
+}
+
+static void StartUtahUniformMonitor() {
+    static std::atomic<bool> s_monitor_started{false};
+    if (s_monitor_started.exchange(true)) {
+        return;
+    }
+    std::thread([]() {
+        for (int i = 0; i < 300; ++i) {
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+            ScanAndPatchUtahUniforms();
+        }
+    }).detach();
+}
+
 void OnGameLoaded() {
     std::filesystem::path patch_dir = Common::FS::GetUserPath(Common::FS::PathType::PatchesDir);
     if (!patch_file.empty()) {
@@ -446,6 +529,8 @@ void OnGameLoaded() {
     }
     ApplyPendingPatches();
     InstallUtahBrandingHook();
+    ScanAndPatchUtahUniforms();
+    StartUtahUniformMonitor();
 }
 
 void AddPatchToQueue(const patchInfo& patchToAdd) {
