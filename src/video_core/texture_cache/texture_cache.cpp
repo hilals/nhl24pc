@@ -160,14 +160,9 @@ const DumpConfig& GetDumpConfig() {
             c.dir = d;
             std::error_code ec;
             std::filesystem::create_directories(c.dir, ec);
-        } else {
-            auto auto_dir = Common::FS::GetUserPath(Common::FS::PathType::UserDir) / "texture_dump";
-            std::error_code ec;
-            if (std::filesystem::is_directory(auto_dir, ec)) {
-                c.enabled = true;
-                c.dir = auto_dir;
-            }
         }
+        // Dumping is opt-in (environment variable only). It used to switch on whenever a
+        // <user>/texture_dump folder existed, which silently slowed the game and filled the disk.
         if (const char* v = std::getenv("NHLPORT_DUMP_MIN"); v && *v) {
             c.min_dim = static_cast<u32>(std::strtoul(v, nullptr, 10));
         }
