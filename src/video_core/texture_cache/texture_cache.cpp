@@ -29,6 +29,7 @@
 #include "video_core/texture_cache/host_compatibility.h"
 #include "video_core/texture_cache/texture_cache.h"
 #include <vulkan/vulkan_format_traits.hpp>
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <unordered_map>
@@ -596,6 +597,136 @@ u32 DetectSelectedPlayerId(bool allow_full_scan, bool force_rescan = false) {
     return current;
 }
 
+// nhlport diag (team select): NHLPORT_TS_IDS="13836,20885,26282,..." lists numbers to look for in guest memory when a
+// multi-player portrait screen uploads its portraits. Hits that sit close together (the team's featured players) are
+// logged with their surroundings, so the portrait order can be tied to player ids. Does nothing when the variable is unset.
+size_t ScanForValuesChunk(const u32* p, size_t n, const u64* bits, u64* idx_out, size_t cap) {
+    size_t found = 0;
+#ifdef _MSC_VER
+    __try {
+#endif
+        for (size_t i = 0; i < n; ++i) {
+            const u32 v = p[i];
+            if (v < 65536u && ((bits[v >> 6] >> (v & 63)) & 1ull) != 0) {
+                if (found < cap) {
+                    idx_out[found] = i;
+                }
+                ++found;
+            }
+        }
+#ifdef _MSC_VER
+    } __except (1) {
+        return static_cast<size_t>(-1);
+    }
+#endif
+    return found;
+}
+
+void DiagScanTeamSelect(u64 frame, VAddr trigger) {
+    static const std::vector<u32> wanted = [] {
+        std::vector<u32> v;
+        if (const char* e = std::getenv("NHLPORT_TS_IDS"); e && *e) {
+            const char* s = e;
+            while (*s) {
+                char* end = nullptr;
+                const unsigned long x = std::strtoul(s, &end, 10);
+                if (end == s) {
+                    ++s;
+                    continue;
+                }
+                if (x < 65536ul) {
+                    v.push_back(static_cast<u32>(x));
+                }
+                s = end;
+            }
+        }
+        return v;
+    }();
+    if (wanted.empty()) {
+        return;
+    }
+    static std::mutex mtx;
+    static u64 last_frame = 0;
+    static u32 scans = 0;
+    std::scoped_lock lk{mtx};
+    if (scans >= 8 || (last_frame != 0 && frame < last_frame + 600)) {
+        return;
+    }
+    last_frame = frame;
+    ++scans;
+    std::vector<u64> bits(1024, 0);
+    for (const u32 v : wanted) {
+        bits[v >> 6] |= 1ull << (v & 63);
+    }
+    LOG_INFO(Render, "portrait-ts: scan {} at frame {} (trigger upload {:x}), {} values", scans, frame, trigger,
+             wanted.size());
+    std::vector<std::pair<VAddr, u32>> hits;
+    constexpr u64 kChunk = 1u << 20;
+    constexpr u64 kOverlap = 16;
+    std::vector<u64> idx(65536);
+    Core::Memory::Instance()->ForEachReadableRange([&](VAddr base, u64 size) {
+        for (u64 off = 0; off < size; off += kChunk - kOverlap) {
+            const u64 bytes = std::min<u64>(kChunk, size - off);
+            const u32* p = reinterpret_cast<const u32*>(base + off);
+            const size_t f = ScanForValuesChunk(p, bytes / 4, bits.data(), idx.data(), idx.size());
+            if (f != static_cast<size_t>(-1)) {
+                for (size_t k = 0; k < std::min(f, idx.size()); ++k) {
+                    const VAddr a = base + off + idx[k] * 4;
+                    u32 v;
+                    if (ReadU32Safe(a, &v) && hits.size() < 400000) {
+                        hits.emplace_back(a, v);
+                    }
+                }
+            }
+            if (off + bytes >= size) {
+                break;
+            }
+        }
+    });
+    std::sort(hits.begin(), hits.end());
+    hits.erase(std::unique(hits.begin(), hits.end()), hits.end());
+    std::unordered_map<u32, u32> per_value;
+    for (const auto& h : hits) {
+        ++per_value[h.second];
+    }
+    for (const auto& [v, n] : per_value) {
+        LOG_INFO(Render, "portrait-ts: value {} found {} times", v, n);
+    }
+    // clusters: hits closer than 512 bytes that hold at least two different values
+    u32 clusters = 0;
+    size_t i = 0;
+    while (i < hits.size() && clusters < 40) {
+        size_t j = i + 1;
+        std::unordered_set<u32> vals{hits[i].second};
+        while (j < hits.size() && hits[j].first - hits[j - 1].first <= 512) {
+            vals.insert(hits[j].second);
+            ++j;
+        }
+        if (vals.size() >= 2) {
+            ++clusters;
+            const VAddr first = hits[i].first;
+            const VAddr last = hits[j - 1].first;
+            std::string members;
+            for (size_t k = i; k < j && k < i + 24; ++k) {
+                members += fmt::format("{}@{:x} ", hits[k].second, hits[k].first);
+            }
+            LOG_INFO(Render, "portrait-ts: cluster {} {} hits, {} values: {}", clusters, j - i, vals.size(), members);
+            const VAddr from = first >= 32 ? first - 32 : first;
+            for (VAddr a = from; a <= last + 32 && a < from + 256; a += 32) {
+                std::string line;
+                for (int w = 0; w < 8; ++w) {
+                    u32 v = 0;
+                    ReadU32Safe(a + w * 4, &v);
+                    line += fmt::format("{:x} ", v);
+                }
+                LOG_INFO(Render, "portrait-ts:   {:x}: {}", a, line);
+            }
+        }
+        i = j;
+    }
+    LOG_INFO(Render, "portrait-ts: scan done, {} hits, {} clusters", hits.size(), clusters);
+}
+
 struct PortraitState {
     u32 installed{0xFFFFFFFFu};
     u64 last_frame{0};
@@ -852,10 +983,173 @@ void TextureCache::ApplyPortraitOverride(Image& image) {
         recent_silhouettes.push_back(info.guest_address);
         recent_silhouette_frame = upload_frame;
     }
+    {
+        static std::atomic<u32> ts_log{0};
+        if (ts_log.fetch_add(1) < 300) {
+            LOG_INFO(Render, "portrait-ts: silhouette upload addr {:x} frame {} multi {}", info.guest_address, upload_frame, multi);
+        }
+    }
+    if (multi) {
+        DiagScanTeamSelect(upload_frame, info.guest_address);
+    }
     InstallPortrait(image, multi ? 0 : DetectSelectedPlayerId(true));
 }
 
 void TextureCache::ApplyTextureOverride(Image& image) {
+    // nhlport debug: NHLPORT_ARRAY_BLANK="WxH:FormatSubstr:layerMaskHex;..." zeroes the chosen layers
+    // (all mips) of matching texture arrays, so we can find which array layer draws the Coyotes crest.
+    // NHLPORT_ARRAY_LOG=1 logs every array image seen.
+    {
+        const auto& ai = image.info;
+        static const std::string blank_spec = [] {
+            const char* v = std::getenv("NHLPORT_ARRAY_BLANK");
+            std::string s(v ? v : "");
+            if (s.empty()) {
+                // Same spec from <user>/array_blank.txt (first line), so it survives without env vars.
+                std::ifstream in(Common::FS::GetUserPath(Common::FS::PathType::UserDir) / "array_blank.txt");
+                std::getline(in, s);
+                while (!s.empty() && (s.back() == '\r' || s.back() == ' ' || s.back() == '\t')) {
+                    s.pop_back();
+                }
+            }
+            if (s.empty()) {
+                // Default: hide the leftover Coyotes chest crest / shoulder patches on Utah jerseys
+                // (hashes below), leaving every other team's crest layers alone.
+                s = "512x512:Bc3Srgb:0f:H";
+            }
+            return s;
+        }();
+        static const bool arr_log = [] {
+            const char* v = std::getenv("NHLPORT_ARRAY_LOG");
+            return v && *v && *v != '0';
+        }();
+        if ((!blank_spec.empty() || arr_log) && ai.resources.layers > 1 && !ai.props.is_volume &&
+            !ai.props.is_depth && ai.num_samples <= 1 && !image.usage.render_target) {
+            const u32 aw = ai.size.width;
+            const u32 ah = ai.size.height;
+            const std::string afmt = vk::to_string(ai.pixel_format);
+            if (arr_log) {
+                LOG_INFO(Render, "ARRAYSEEN {}x{} {} layers {} levels {} @ {:#x}", aw, ah, afmt,
+                         u32(ai.resources.layers), u32(ai.resources.levels), ai.guest_address);
+            }
+            size_t pos = 0;
+            while (pos < blank_spec.size()) {
+                size_t end = blank_spec.find(';', pos);
+                if (end == std::string::npos) end = blank_spec.size();
+                const std::string item = blank_spec.substr(pos, end - pos);
+                pos = end + 1;
+                const size_t c1 = item.find(':');
+                const size_t c2 = item.find(':', c1 == std::string::npos ? 0 : c1 + 1);
+                if (c1 == std::string::npos || c2 == std::string::npos) continue;
+                if (item.substr(0, c1) != fmt::format("{}x{}", aw, ah)) continue;
+                if (afmt.find(item.substr(c1 + 1, c2 - c1 - 1)) == std::string::npos) continue;
+                const u64 mask = std::strtoull(item.substr(c2 + 1).c_str(), nullptr, 16);
+                // Optional 4th field "WxH:Fmt:mask:N": only blank the Nth (0-based) matching array in
+                // the order first seen (by guest address), so one player model's crest can be hit alone.
+                const size_t c3 = item.find(':', c2 + 1);
+                // "...:H" instead of an index: blank only layers whose content hash (mip 2) is listed in
+                // <user>/array_blank_hashes.txt (one hex hash per line). Hashes of layers 0-3 are always logged.
+                const bool by_hash = c3 != std::string::npos && item.size() > c3 + 1 && item[c3 + 1] == 'H';
+                if (c3 != std::string::npos && !by_hash) {
+                    static std::mutex ord_mtx;
+                    static std::unordered_map<u64, u32> ord_by_addr;
+                    const u32 want = u32(std::strtoul(item.substr(c3 + 1).c_str(), nullptr, 10));
+                    u32 got;
+                    {
+                        std::scoped_lock lk{ord_mtx};
+                        auto [oit, ins] = ord_by_addr.try_emplace(ai.guest_address, u32(ord_by_addr.size()));
+                        got = oit->second;
+                    }
+                    if (got != want) continue;
+                }
+                const auto abx = vk::blockExtent(ai.pixel_format)[0];
+                const auto aby = vk::blockExtent(ai.pixel_format)[1];
+                const u32 abw = Common::DivCeil(aw, u32(abx));
+                const u32 abh = Common::DivCeil(ah, u32(aby));
+                const u32 absz = vk::blockSize(ai.pixel_format);
+                const u64 zsize = u64(abw) * abh * absz;
+                const auto zbuf = runtime.GetStagingPool().Request(zsize, MemoryType::HostUncached, 16, false);
+                std::memset(zbuf.mapped, 0, zsize);
+                zbuf.buffer->Flush(zbuf.offset, zsize);
+                std::vector<vk::BufferImageCopy> zc;
+                const u32 lv = u32(ai.resources.levels);
+                u64 layer_hash[4]{};
+                {
+                    const u32 hm = std::min<u32>(2, lv - 1);
+                    const u32 hw = std::max(aw >> hm, 1u);
+                    const u32 hh = std::max(ah >> hm, 1u);
+                    const u64 hsz = u64(Common::DivCeil(hw, u32(abx))) * Common::DivCeil(hh, u32(aby)) * absz;
+                    const u32 nl = std::min<u32>(ai.resources.layers, 4);
+                    const auto hbuf = runtime.GetStagingPool().Request(hsz * nl, MemoryType::HostCached, 16, false);
+                    std::vector<vk::BufferImageCopy> hc;
+                    for (u32 l = 0; l < nl; ++l) {
+                        hc.push_back({
+                            .bufferOffset = hbuf.offset + l * hsz,
+                            .bufferRowLength = 0,
+                            .bufferImageHeight = 0,
+                            .imageSubresource = {.aspectMask = vk::ImageAspectFlagBits::eColor,
+                                                 .mipLevel = hm,
+                                                 .baseArrayLayer = l,
+                                                 .layerCount = 1},
+                            .imageOffset = {0, 0, 0},
+                            .imageExtent = {hw, hh, 1},
+                        });
+                    }
+                    scheduler.EndRendering();
+                    runtime.DownloadImage(&image, hbuf.buffer, hc);
+                    scheduler.Finish();
+                    hbuf.Invalidate();
+                    for (u32 l = 0; l < nl; ++l) {
+                        layer_hash[l] = XXH3_64bits(static_cast<const u8*>(hbuf.mapped) + l * hsz, hsz);
+                    }
+                    static std::mutex hl_mtx;
+                    static std::unordered_set<u64> hl_seen;
+                    std::scoped_lock lk{hl_mtx};
+                    if (hl_seen.insert(ai.guest_address ^ layer_hash[0] ^ (layer_hash[1] << 1)).second) {
+                        LOG_INFO(Render, "ARRAYHASH @ {:#x} layers {} L0 {:016x} L1 {:016x} L2 {:016x} L3 {:016x}",
+                                 ai.guest_address, u32(ai.resources.layers), layer_hash[0], layer_hash[1],
+                                 layer_hash[2], layer_hash[3]);
+                    }
+                }
+                static const std::unordered_set<u64> blank_hashes = [] {
+                    // Coyotes chest kachina (array L0) and shoulder patches (array L1/L2).
+                    std::unordered_set<u64> s{0xba10aa88955cd737ULL, 0xe69f43c5d25dcaebULL};
+                    std::ifstream in(Common::FS::GetUserPath(Common::FS::PathType::UserDir) / "array_blank_hashes.txt");
+                    std::string line;
+                    while (std::getline(in, line)) {
+                        const u64 h = std::strtoull(line.c_str(), nullptr, 16);
+                        if (h != 0) s.insert(h);
+                    }
+                    return s;
+                }();
+                for (u32 layer = 0; layer < std::min<u32>(ai.resources.layers, 64); ++layer) {
+                    if (!((mask >> layer) & 1)) continue;
+                    if (by_hash && (layer >= 4 || blank_hashes.count(layer_hash[layer]) == 0)) continue;
+                    for (u32 m = 0; m < lv; ++m) {
+                        const u32 mw = std::max(aw >> m, 1u);
+                        const u32 mh = std::max(ah >> m, 1u);
+                        zc.push_back({
+                            .bufferOffset = zbuf.offset,
+                            .bufferRowLength = 0,
+                            .bufferImageHeight = 0,
+                            .imageSubresource = {.aspectMask = vk::ImageAspectFlagBits::eColor,
+                                                 .mipLevel = m,
+                                                 .baseArrayLayer = layer,
+                                                 .layerCount = 1},
+                            .imageOffset = {0, 0, 0},
+                            .imageExtent = {mw, mh, 1},
+                        });
+                    }
+                }
+                if (!zc.empty()) {
+                    scheduler.EndRendering();
+                    runtime.UploadImage(&image, zbuf.buffer, zc);
+                    LOG_INFO(Render, "ARRAYBLANK {}x{} {} mask {:x} @ {:#x} ({} copies)", aw, ah, afmt, mask,
+                             ai.guest_address, zc.size());
+                }
+            }
+        }
+    }
     const auto& info = image.info;
     if (info.props.is_depth || info.num_samples > 1 || info.resources.layers != 1 ||
         info.props.is_volume || image.usage.render_target) {
@@ -868,7 +1162,11 @@ void TextureCache::ApplyTextureOverride(Image& image) {
     const u32 w = info.size.width;
     const u32 h = info.size.height;
     const bool is_ui_cand = (w <= 512 && h <= 512 && w >= 32 && h >= 32 && (w == h || (w == 256 && h == 512) || (w == 512 && h == 256)));
-    if (!is_ui_cand && cfg.target_dims.count((w << 16) | h) == 0) {
+    static const bool log_all = [] {
+        const char* v = std::getenv("NHLPORT_LOG_BIND");
+        return v && *v && *v != '0';
+    }();
+    if (!is_ui_cand && cfg.target_dims.count((w << 16) | h) == 0 && !log_all) {
         return;
     }
 
@@ -898,6 +1196,7 @@ void TextureCache::ApplyTextureOverride(Image& image) {
 
     const u8* data = reinterpret_cast<const u8*>(download.mapped);
     const u64 hash = XXH3_64bits(data, mip0_size);
+    image.content_hash = hash;
 
     if (is_ui_cand) {
         LOG_INFO(Render, "UI tex {}x{} format {} hash {:016x} (override: {})", w, h, vk::to_string(info.pixel_format), hash, cfg.overrides.count(hash) != 0);
@@ -1032,6 +1331,76 @@ void TextureCache::DumpImageToDisk(Image& image) {
                                          hash, info.guest_address);
     LOG_INFO(Render, "Dumped texture: {}", name);
     WriteDds(cfg.dir / name, w, h, dxgi, block, block ? blocks_w * blocks_h * bsize : w * (bsize), data, size);
+}
+
+// nhlport debug: texture arrays / other images that DumpImageToDisk and ApplyTextureOverride skip.
+// Logs why, and for arrays (layers > 1) dumps mip 0 of every layer as its own .dds file.
+void TextureCache::DebugDumpLayers(Image& image) {
+    const auto& info = image.info;
+    if (info.props.is_depth || info.num_samples > 1 || image.usage.render_target) {
+        return;
+    }
+    const DumpConfig& cfg = GetDumpConfig();
+    if (!cfg.enabled) {
+        return;
+    }
+    const u32 w = info.size.width;
+    const u32 h = info.size.height;
+    const u32 layers = info.resources.layers;
+    if (info.resources.layers == 1 && !info.props.is_volume) {
+        return; // normal textures are handled by the regular paths
+    }
+    LOG_INFO(Render, "ARRAYTEX {}x{} {} layers {} levels {} volume {} @ {:#x}", w, h,
+             vk::to_string(info.pixel_format), layers, u32(info.resources.levels), u32(info.props.is_volume),
+             info.guest_address);
+    if (info.props.is_volume || w < 32 || h < 32 || w > 2048 || h > 2048) {
+        return;
+    }
+    const u32 dxgi = DxgiFormatFor(info.pixel_format);
+    if (dxgi == 0) {
+        return;
+    }
+    const auto bx = vk::blockExtent(info.pixel_format)[0];
+    const auto by = vk::blockExtent(info.pixel_format)[1];
+    const bool block = bx > 1;
+    const u32 blocks_w = Common::DivCeil(w, u32(bx));
+    const u32 blocks_h = Common::DivCeil(h, u32(by));
+    const u32 bsize = vk::blockSize(info.pixel_format);
+    const u32 size = blocks_w * blocks_h * bsize;
+    for (u32 layer = 0; layer < std::min<u32>(layers, 64); ++layer) {
+        const auto download = runtime.GetStagingPool().Request(size, MemoryType::HostCached, 16, false);
+        const vk::BufferImageCopy copy = {
+            .bufferOffset = download.offset,
+            .bufferRowLength = 0,
+            .bufferImageHeight = 0,
+            .imageSubresource = {.aspectMask = vk::ImageAspectFlagBits::eColor,
+                                 .mipLevel = 0,
+                                 .baseArrayLayer = layer,
+                                 .layerCount = 1},
+            .imageOffset = {0, 0, 0},
+            .imageExtent = {w, h, 1},
+        };
+        scheduler.EndRendering();
+        runtime.DownloadImage(&image, download.buffer, std::span{&copy, 1});
+        scheduler.Finish();
+        download.Invalidate();
+        const u8* data = reinterpret_cast<const u8*>(download.mapped);
+        const u64 hash = XXH3_64bits(data, size);
+        static std::mutex mtx;
+        static std::unordered_set<u64> seen;
+        {
+            std::scoped_lock lk{mtx};
+            if (!seen.insert(hash).second) {
+                continue;
+            }
+        }
+        const std::string name = fmt::format("{}x{}_{}_{:016x}_L{}_a{:x}.dds", w, h,
+                                             vk::to_string(info.pixel_format), hash, layer,
+                                             info.guest_address);
+        LOG_INFO(Render, "ARRAYLAYER {} layer {}/{} hash {:016x}", name, layer, layers, hash);
+        WriteDds(cfg.dir / name, w, h, dxgi, block, block ? blocks_w * blocks_h * bsize : w * bsize, data,
+                 size);
+    }
 }
 
 void TextureCache::MarkAsMaybeDirty(ImageId image_id, Image& image) {

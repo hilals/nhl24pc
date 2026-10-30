@@ -17,6 +17,8 @@
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include <cstdlib>
+#include <string>
+#include <unordered_set>
 #include "video_core/perf_counters.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
@@ -1362,6 +1364,12 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
         image_descriptor_array_sizes.push_back(num_bindings);
     }
 
+    static const bool log_bind = [] {
+        const char* v = std::getenv("NHLPORT_LOG_BIND");
+        return v && *v && *v != '0';
+    }();
+    std::string bind_desc;
+    u64 bind_key = 0;
     // Second pass to re-bind images that were updated after binding
     for (u32 i = 0; i < num_images; ++i) {
         auto& [image_id, desc] = image_bindings[i];
@@ -1376,6 +1384,25 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
             }
 
             bound_images.emplace_back(image_id);
+            if (log_bind) {
+                auto& li = texture_cache.GetImage(image_id);
+                static std::unordered_set<const void*> tried_hash;
+                if (li.content_hash == 0 && !li.info.props.is_depth && !is_storage &&
+                    !li.usage.render_target && !li.binding.is_target && tried_hash.insert(&li).second) {
+                    texture_cache.DebugHashAndDump(li);
+                    if (li.content_hash == 0) {
+                        LOG_INFO(Render, "ZEROHASH {}x{} {} layers {} levels {} volume {} samples {} rt {}",
+                                 li.info.size.width, li.info.size.height, vk::to_string(li.info.pixel_format),
+                                 li.info.resources.layers, li.info.resources.levels,
+                                 u32(li.info.props.is_volume), u32(li.info.num_samples),
+                                 u32(li.usage.render_target));
+                    }
+                }
+                bind_desc += fmt::format(" [{:016x} {}x{} {}{}]", li.content_hash, li.info.size.width,
+                                         li.info.size.height, vk::to_string(li.info.pixel_format),
+                                         is_storage ? " ST" : "");
+                bind_key = bind_key * 1099511628211ULL ^ li.content_hash ^ (u64(li.info.size.width) << 20);
+            }
 
             auto& image = texture_cache.GetImage(image_id);
             auto& image_view = texture_cache.FindTexture(image_id, desc);
@@ -1415,6 +1442,15 @@ void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindin
 
             image_infos.emplace_back(VK_NULL_HANDLE, *image_view.image_view,
                                      image.backing->state.layout);
+        }
+    }
+
+    if (log_bind && num_images > 0) {
+        static std::unordered_set<u64> logged_binds;
+        const u64 key = bind_key ^ (u64(stage.pgm_hash) * 0x9E3779B97F4A7C15ULL);
+        if (logged_binds.insert(key).second) {
+            LOG_INFO(Render, "DRAWBIND stage {} pgm {:016x}:{}", static_cast<int>(stage.hw_stage),
+                     u64(stage.pgm_hash), bind_desc);
         }
     }
 
