@@ -18,8 +18,7 @@ implementations, and the GPU work goes through Vulkan.
 **Utah Mammoth.** Arizona becomes the Utah Mammoth everywhere in the game: name and team select, and the home, away and
 alternate jerseys with the Mammoth crest. The leftover Coyotes chest crest and shoulder patches are hidden on the
 Utah jerseys while every other team keeps its crests, and Utah's uniform records are forced to the right set. Install the textures
-from the release (`user\texture_override`); notes in `docs/UTAH_CREST_NOTES.md`. Also fixed: Jackson LaCombe's portrait on
-team select and Anaheim's UI being hijacked by the Utah hooks.
+from the release (`user\texture_override`); notes in `docs/UTAH_CREST_NOTES.md`.
 
 **Crash and freeze fixes**
 - *Create a team* no longer crashes: the shader recompiler now handles register-indexed jump tables (`s_setpc_b64`) whose
@@ -30,7 +29,7 @@ team select and Anaheim's UI being hijacked by the Utah hooks.
 - The texture dumper no longer switches itself on (only with `NHLPORT_DUMP_TEXTURES`).
 
 **Graphics and portraits**
-- NVIDIA DLSS Super Resolution and DLAA with 21:9 ultrawide presentation.
+- NVIDIA DLSS 5 support (Super Resolution and DLAA) with 21:9 ultrawide presentation.
 - Per-player portrait pictures for created players and players without a photo (`user\portrait_override\<player id>.dds`).
 
 Releases contain the jersey textures and a ready roster with its installer. Everything is for personal use with your own copy of the game.
