@@ -88,13 +88,6 @@ AMD RDNA; integrated GPUs are too slow); 8 GB RAM (16 GB recommended); about 40 
 extracted game; a gamepad (Xbox, DualShock 4, DualSense) is detected automatically, the keyboard works
 too.
 
-**Known issues** (v0.9.0): the 1.6 update freezes at the first puck drop (use the base game v01.00 only);
-occasional black tile columns in cutscenes that run at a dynamic resolution
-(analysis and next steps in `docs/DEVLOG.sk.md`, section "Finálny build v0.8.1"); rare "device lost" crashes. If the game
-crashes while a match loads (right after team selection, error 0xc0000005, issues #1/#3), turn on **Red zone
-protection (Windows)** in the launcher's quick settings (off by default, experimental; see `docs/DEVLOG.sk.md`,
-section "v0.8.3: ochrana red zone"). Windows SmartScreen may warn about the unsigned exe
-(More info → Run anyway); some antivirus products dislike emulators that map large memory regions – add
 an exception if needed.
 
 ## Repository layout
