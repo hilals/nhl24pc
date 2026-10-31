@@ -483,7 +483,7 @@ namespace NhlPort
     // ------------------------------------------------------------------ the form
     public class LauncherForm : Form
     {
-        const string FallbackVersion = "0.8.3";
+        const string FallbackVersion = "0.9.0";
         string PortVersion = FallbackVersion; // taken from the version resource of nhl24.exe when present
         const string TitleId = "CUSA37933";
         readonly string baseDir;

@@ -9,7 +9,7 @@ implementations, and the GPU work goes through Vulkan.
 | | |
 |---|---|
 | Ready-to-run package | [`release/`](release) – `launcher.exe`, `nhl24.exe`, runtime DLLs, clean `user\` template |
-| Current build | **v0.8.3** (2026-10-14), Windows 10/11 x64 |
+| Current build | **v0.9.0** (2026-10-30), Windows 10/11 x64 |
 | Needs | your own NHL 24 PKG (base v01.00, optionally the update), a Vulkan 1.3 GPU |
 | License | GPL-2.0-or-later (same as shadPS4) |
 
@@ -89,7 +89,7 @@ AMD RDNA; integrated GPUs are too slow); 8 GB RAM (16 GB recommended); about 40 
 extracted game; a gamepad (Xbox, DualShock 4, DualSense) is detected automatically, the keyboard works
 too.
 
-**Known issues** (v0.8.3): the 1.6 update freezes at the first puck drop (use the base game v01.00 only);
+**Known issues** (v0.9.0): the 1.6 update freezes at the first puck drop (use the base game v01.00 only);
 occasional black tile columns in cutscenes that run at a dynamic resolution
 (analysis and next steps in `docs/DEVLOG.sk.md`, section "Finálny build v0.8.1"); rare "device lost" crashes. If the game
 crashes while a match loads (right after team selection, error 0xc0000005, issues #1/#3), turn on **Red zone
