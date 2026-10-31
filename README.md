@@ -88,8 +88,6 @@ AMD RDNA; integrated GPUs are too slow); 8 GB RAM (16 GB recommended); about 40 
 extracted game; a gamepad (Xbox, DualShock 4, DualSense) is detected automatically, the keyboard works
 too.
 
-an exception if needed.
-
 ## Repository layout
 
 ```
