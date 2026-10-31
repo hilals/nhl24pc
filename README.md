@@ -9,7 +9,7 @@ implementations, and the GPU work goes through Vulkan.
 | | |
 |---|---|
 | Ready-to-run package | [`release/`](release) – `launcher.exe`, `nhl24.exe`, runtime DLLs, clean `user\` template |
-| Current build | **v0.8.3** (2026-10-14), Windows 10/11 x64 |
+| Current build | **v0.9.0** (2026-10-30), Windows 10/11 x64 |
 | Needs | your own NHL 24 PKG (base v01.00, optionally the update), a Vulkan 1.3 GPU |
 | License | GPL-2.0-or-later (same as shadPS4) |
 
@@ -18,8 +18,7 @@ implementations, and the GPU work goes through Vulkan.
 **Utah Mammoth.** Arizona becomes the Utah Mammoth everywhere in the game: name and team select, and the home, away and
 alternate jerseys with the Mammoth crest. The leftover Coyotes chest crest and shoulder patches are hidden on the
 Utah jerseys while every other team keeps its crests, and Utah's uniform records are forced to the right set. Install the textures
-from the release (`user\texture_override`); notes in `docs/UTAH_CREST_NOTES.md`. Also fixed: Jackson LaCombe's portrait on
-team select and Anaheim's UI being hijacked by the Utah hooks.
+from the release (`user\texture_override`); notes in `docs/UTAH_CREST_NOTES.md`.
 
 **Crash and freeze fixes**
 - *Create a team* no longer crashes: the shader recompiler now handles register-indexed jump tables (`s_setpc_b64`) whose
@@ -30,7 +29,7 @@ team select and Anaheim's UI being hijacked by the Utah hooks.
 - The texture dumper no longer switches itself on (only with `NHLPORT_DUMP_TEXTURES`).
 
 **Graphics and portraits**
-- NVIDIA DLSS Super Resolution and DLAA with 21:9 ultrawide presentation.
+- NVIDIA DLSS 5 support (Super Resolution and DLAA) with 21:9 ultrawide presentation.
 - Per-player portrait pictures for created players and players without a photo (`user\portrait_override\<player id>.dds`).
 
 Releases contain the jersey textures and a ready roster with its installer. Everything is for personal use with your own copy of the game.
@@ -89,7 +88,7 @@ AMD RDNA; integrated GPUs are too slow); 8 GB RAM (16 GB recommended); about 40 
 extracted game; a gamepad (Xbox, DualShock 4, DualSense) is detected automatically, the keyboard works
 too.
 
-**Known issues** (v0.8.3): the 1.6 update freezes at the first puck drop (use the base game v01.00 only);
+**Known issues** (v0.9.0): the 1.6 update freezes at the first puck drop (use the base game v01.00 only);
 occasional black tile columns in cutscenes that run at a dynamic resolution
 (analysis and next steps in `docs/DEVLOG.sk.md`, section "Finálny build v0.8.1"); rare "device lost" crashes. If the game
 crashes while a match loads (right after team selection, error 0xc0000005, issues #1/#3), turn on **Red zone
