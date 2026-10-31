@@ -67,6 +67,14 @@ class TextureCache {
     using PageTable = Common::MultiLevelPageTable<Traits>;
 
 public:
+    /// nhlport debug: hash/dump/override an image that was never refreshed through the normal upload path.
+    void DebugHashAndDump(Image& image) {
+        ApplyTextureOverride(image);
+        DumpImageToDisk(image);
+        DebugDumpLayers(image);
+    }
+    void DebugDumpLayers(Image& image);
+
     enum class BindingType : u32 {
         Texture,
         Storage,
@@ -364,7 +372,9 @@ private:
 
     /// Copies image memory back to CPU.
     void DownloadImageMemory(ImageId image_id, bool sync = false);
+    void DumpImageToDisk(Image& image);
     void ApplyPortraitOverride(Image& image);
+    void ApplyTextureOverride(Image& image);
     void InstallPortrait(Image& image, u32 player_id);
     void RefreshPortraitOnBind(Image& image);
 

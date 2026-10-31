@@ -13,6 +13,28 @@ implementations, and the GPU work goes through Vulkan.
 | Needs | your own NHL 24 PKG (base v01.00, optionally the update), a Vulkan 1.3 GPU |
 | License | GPL-2.0-or-later (same as shadPS4) |
 
+## What this fork adds (vs. HajDEO/nhl24pc v0.8.3)
+
+**Utah Mammoth.** Arizona becomes the Utah Mammoth everywhere in the game: name and team select, and the home, away and
+alternate jerseys with the Mammoth crest. The leftover Coyotes chest crest and shoulder patches are hidden on the
+Utah jerseys while every other team keeps its crests, and Utah's uniform records are forced to the right set. Install the textures
+from the release (`user\texture_override`); notes in `docs/UTAH_CREST_NOTES.md`. Also fixed: Jackson LaCombe's portrait on
+team select and Anaheim's UI being hijacked by the Utah hooks.
+
+**Crash and freeze fixes**
+- *Create a team* no longer crashes: the shader recompiler now handles register-indexed jump tables (`s_setpc_b64`) whose
+  index register is overwritten before the jump, by copying the index to a spare register.
+- *Be a Pro* crash fixed by the same jump-table expansion (it runs before the control-flow graph is built).
+- Texture cache recovers from an equal-address image overlap instead of aborting.
+- The 1.60 update's first-faceoff freeze has a patch entry in `game_patches/nhl24.xml`.
+- The texture dumper no longer switches itself on (only with `NHLPORT_DUMP_TEXTURES`).
+
+**Graphics and portraits**
+- NVIDIA DLSS Super Resolution and DLAA with 21:9 ultrawide presentation.
+- Per-player portrait pictures for created players and players without a photo (`user\portrait_override\<player id>.dds`).
+
+Releases contain the jersey textures and a ready roster with its installer. Everything is for personal use with your own copy of the game.
+
 ## How it works
 
 The PS4 is an x86-64 machine. NHL 24's executable (`eboot.bin`) and its modules are ordinary AMD64 code,
