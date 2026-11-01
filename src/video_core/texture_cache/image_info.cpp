@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+#include <bit>
+
 #include "common/assert.h"
 #include "core/libraries/kernel/process.h"
 #include "core/libraries/videoout/buffer.h"
@@ -165,6 +168,16 @@ bool ImageInfo::IsCompatible(const ImageInfo& info) const {
 }
 
 void ImageInfo::UpdateSize() noexcept {
+    // nhlport (Vulkan validation, VUID-VkImageCreateInfo-mipLevels-00958): some T#s ask for one
+    // mip more than the full chain of their size (e.g. 10 levels on 256x256). Vulkan can't create
+    // such an image; the extra level would be smaller than 1x1 and is never sampled correctly.
+    {
+        const u32 max_dim = std::max({size.width, size.height, props.is_volume ? size.depth : 1u});
+        const u32 full_chain = std::max<u32>(std::bit_width(max_dim), 1u);
+        if (static_cast<u32>(resources.levels) > full_chain) {
+            resources.levels = static_cast<u16>(full_chain);
+        }
+    }
     ASSERT_MSG(array_mode != AmdGpu::ArrayMode::ArrayLinearGeneral,
                "Unhandled array mode: ArrayLinearGeneral");
     if (std::has_single_bit(pitch) && pitch <= 1024 && pitch == size.height && size.depth == 1 &&

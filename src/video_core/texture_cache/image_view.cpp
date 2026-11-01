@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+#include <atomic>
+
 #include "common/logging/log.h"
 #include "shader_recompiler/resource.h"
 #include "video_core/amdgpu/pixel_format.h"
@@ -97,41 +100,92 @@ ImageView::ImageView(const Vulkan::Instance& instance, const ImageViewInfo& info
     if (!info.is_storage) {
         usage_ci.usage &= ~vk::ImageUsageFlagBits::eStorage;
     }
+    // nhlport: the image may have fewer mips than the T# asks for (see ImageInfo::UpdateSize).
+    const u32 image_levels = std::max<u32>(image.info.resources.levels, 1u);
+    const u32 view_base_level = std::min<u32>(info.range.base.level, image_levels - 1);
+    const u32 view_levels =
+        std::max<u32>(std::min<u32>(info.range.extent.levels, image_levels - view_base_level), 1u);
     vk::ImageViewMinLodCreateInfoEXT min_lod_ci{};
     if (info.min_lod != 0 && instance.IsImageViewMinLodSupported()) {
         const float last_level =
-            static_cast<float>(info.range.base.level + info.range.extent.levels - 1);
+            static_cast<float>(view_base_level + view_levels - 1);
         min_lod_ci.minLod = std::min(static_cast<float>(info.min_lod) / 256.f, last_level);
         usage_ci.pNext = &min_lod_ci;
     }
     // When sampling D32/D16 texture from shader, the T# specifies R32/R16 format so adjust it.
     vk::Format format = info.format;
     vk::ImageAspectFlags aspect = image.aspect_mask;
+    bool depth_stencil_view = false;
     if (image.aspect_mask & vk::ImageAspectFlagBits::eDepth &&
         Vulkan::LiverpoolToVK::IsFormatDepthCompatible(format)) {
         format = image.info.pixel_format;
         aspect = vk::ImageAspectFlagBits::eDepth;
+        depth_stencil_view = true;
     }
     if (image.aspect_mask & vk::ImageAspectFlagBits::eStencil &&
         Vulkan::LiverpoolToVK::IsFormatStencilCompatible(format)) {
         format = image.info.pixel_format;
         aspect = vk::ImageAspectFlagBits::eStencil;
+        depth_stencil_view = true;
+    }
+    // nhlport (Vulkan validation, VUID-VkImageViewCreateInfo-image-01761): a colour view of a
+    // depth image (e.g. A2B10G10R10 over D32 when the game swaps a buffer between the two) is not
+    // allowed in Vulkan and undefined on the GPU. Read the depth instead.
+    if ((image.aspect_mask & vk::ImageAspectFlagBits::eDepth) && !depth_stencil_view &&
+        format != image.info.pixel_format) {
+        static std::atomic<u32> logged{0};
+        if (logged.fetch_add(1, std::memory_order_relaxed) < 8) {
+            LOG_WARNING(Render_Vulkan, "colour view {} of depth image {} {}x{}, using depth view",
+                        vk::to_string(format), vk::to_string(image.info.pixel_format),
+                        image.info.size.width, image.info.size.height);
+        }
+        format = image.info.pixel_format;
+        aspect = vk::ImageAspectFlagBits::eDepth;
     }
 
     const auto components = info.mapping == AmdGpu::IdentityMapping
                                 ? vk::ComponentMapping{}
                                 : Vulkan::LiverpoolToVK::ComponentMapping(info.mapping);
 
+    const vk::Format view_format = instance.GetSupportedFormat(format, image.format_features);
+    // nhlport (Vulkan validation, VUID-VkImageViewCreateInfo-usage-08931): a view inherits every
+    // usage of its image, but a reinterpreting view format may not support all of them
+    // (E5B9G9R9 can't be a colour attachment on NVIDIA). Keep only what the view format supports.
+    {
+        const auto feats =
+            instance.GetPhysicalDevice().getFormatProperties(view_format).optimalTilingFeatures;
+        if (!(feats & vk::FormatFeatureFlagBits::eColorAttachment)) {
+            usage_ci.usage &= ~vk::ImageUsageFlagBits::eColorAttachment;
+        }
+        if (!(feats & vk::FormatFeatureFlagBits::eDepthStencilAttachment)) {
+            usage_ci.usage &= ~vk::ImageUsageFlagBits::eDepthStencilAttachment;
+        }
+        if (!(feats & vk::FormatFeatureFlagBits::eStorageImage)) {
+            usage_ci.usage &= ~vk::ImageUsageFlagBits::eStorage;
+        }
+        if (!(feats & vk::FormatFeatureFlagBits::eSampledImage)) {
+            usage_ci.usage &= ~vk::ImageUsageFlagBits::eSampled;
+        }
+        if (!(usage_ci.usage & (vk::ImageUsageFlagBits::eColorAttachment |
+                                vk::ImageUsageFlagBits::eDepthStencilAttachment))) {
+            usage_ci.usage &= ~vk::ImageUsageFlagBits::eAttachmentFeedbackLoopEXT;
+        }
+        if (!usage_ci.usage) {
+            usage_ci.usage = image.usage_flags & (vk::ImageUsageFlagBits::eTransferSrc |
+                                                  vk::ImageUsageFlagBits::eTransferDst);
+        }
+    }
+
     const vk::ImageViewCreateInfo image_view_ci = {
         .pNext = &usage_ci,
         .image = image.GetImage(),
         .viewType = ConvertImageViewType(info.type),
-        .format = instance.GetSupportedFormat(format, image.format_features),
+        .format = view_format,
         .components = components,
         .subresourceRange{
             .aspectMask = aspect,
-            .baseMipLevel = info.range.base.level,
-            .levelCount = info.range.extent.levels,
+            .baseMipLevel = view_base_level,
+            .levelCount = view_levels,
             .baseArrayLayer = info.range.base.layer,
             .layerCount = info.range.extent.layers,
         },

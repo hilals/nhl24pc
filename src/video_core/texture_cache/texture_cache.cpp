@@ -3,6 +3,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <string_view>
 #include <array>
 #include <span>
 #include "common/diag_log.h"
@@ -1544,6 +1545,35 @@ void TextureCache::UnmapMemory(VAddr cpu_addr, size_t size) {
     }
 }
 
+// nhlport: NHLPORT_DEPTH_COLOR_FIX=1 / 0 forces the depth-as-colour fix on / off; by default it is
+// on for PS4 Pro mode and NVIDIA Pascal (GTX 10xx, GT 10xx, MX 1xx, TITAN X/Xp, Quadro P), where
+// depth-as-colour aliasing invalidates image views and produces black frames / GPU faults.
+bool TextureCache::DepthAsColorFix() const {
+    static const bool enabled = [this] {
+        if (const char* env = std::getenv("NHLPORT_DEPTH_COLOR_FIX"); env && env[0]) {
+            return env[0] != '0';
+        }
+        if (EmulatorSettings.IsNeo()) {
+            return true;
+        }
+        if (instance.GetVendorID() == 0x10DE) {
+            const std::string_view name = instance.GetModelName();
+            for (const std::string_view key : {"GTX 10", "GT 10", "MX1", "MX 1", "MX2", "MX 2",
+                                               "TITAN X", "TITAN Xp", "Quadro P", "Tesla P"}) {
+                if (name.find(key) != std::string_view::npos) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }();
+    static std::once_flag logged;
+    std::call_once(logged, [&] {
+        LOG_INFO(Render, "depth-as-colour fix: {}", enabled ? "on" : "off");
+    });
+    return enabled;
+}
+
 ImageId TextureCache::ResolveDepthOverlap(const ImageInfo& requested_info, BindingType binding,
                                           ImageId cache_image_id) {
     auto& cache_image = slot_images[cache_image_id];
@@ -1564,6 +1594,21 @@ ImageId TextureCache::ResolveDepthOverlap(const ImageInfo& requested_info, Bindi
         // The guest requires a depth sampled texture, but cache can offer only Rxf. Need to
         // recreate the image.
         recreate |= requested_info.props.is_depth && !cache_image.info.props.is_depth;
+        // nhlport: the guest samples a depth image with a colour format that has no depth
+        // equivalent (NHL 24 aliases its depth buffer with B10G11R11 / A2B10G10R10 targets).
+        // A colour view of a depth image is invalid Vulkan: newer GPUs tolerate it, GTX 10xx
+        // (Pascal) raises "TEX FORMAT" and the device is lost. Recreate it as a colour image.
+        if (DepthAsColorFix() && cache_image.info.props.is_depth && !requested_info.props.is_depth &&
+            !Vulkan::LiverpoolToVK::IsFormatDepthCompatible(requested_info.pixel_format)) {
+            recreate = true;
+            static std::atomic<u64> n_fix{0};
+            const u64 k = n_fix.fetch_add(1, std::memory_order_relaxed);
+            if (k < 20 || k % 1000 == 0) {
+                LOG_INFO(Render, "depth-as-colour fix #{}: {} sampled as {} @ {:#x}", k,
+                         vk::to_string(cache_image.info.pixel_format),
+                         vk::to_string(requested_info.pixel_format), requested_info.guest_address);
+            }
+        }
         break;
     case BindingType::Storage:
         // If the guest is going to use previously created depth as storage, the image needs to be

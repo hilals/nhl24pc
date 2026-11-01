@@ -178,6 +178,9 @@ public:
                                                                ImageId merged_image_id);
 
     /// Resolves depth overlap and either re-creates the image or returns existing one
+    /// nhlport: recreate depth images sampled with a colour format (see texture_cache.cpp).
+    [[nodiscard]] bool DepthAsColorFix() const;
+
     [[nodiscard]] ImageId ResolveDepthOverlap(const ImageInfo& requested_info, BindingType binding,
                                               ImageId cache_img_id);
 

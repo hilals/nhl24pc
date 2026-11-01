@@ -773,6 +773,28 @@ void Runtime::FlushBarriers() {
 
     scheduler.EndRendering();
     const auto cmdbuf = scheduler.CommandBuffer();
+    // nhlport (from the Be a Pro fork, R8): a depth attachment that is also sampled still does its
+    // attachment store at EndRendering, after resource binding may have recorded ShaderRead only.
+    // Include that store in the source scope of the transitions (Vulkan validation:
+    // SYNC-HAZARD-WRITE-AFTER-WRITE on D32SfloatS8Uint attachments).
+    for (auto& barrier : image_barriers) {
+        if ((barrier.subresourceRange.aspectMask &
+             (vk::ImageAspectFlagBits::eDepth | vk::ImageAspectFlagBits::eStencil)) &&
+            barrier.oldLayout != vk::ImageLayout::eUndefined &&
+            barrier.srcQueueFamilyIndex == VK_QUEUE_FAMILY_IGNORED &&
+            barrier.dstQueueFamilyIndex == VK_QUEUE_FAMILY_IGNORED) {
+            barrier.srcStageMask |= vk::PipelineStageFlagBits2::eEarlyFragmentTests |
+                                    vk::PipelineStageFlagBits2::eLateFragmentTests;
+            barrier.srcAccessMask |= vk::AccessFlagBits2::eDepthStencilAttachmentWrite;
+            // nhlport (Vulkan validation, SYNC-HAZARD-READ-AFTER-WRITE at vkCmdBeginRendering):
+            // the same depth image is then often loaded as the attachment without another
+            // transition, so the transition must also be visible to the attachment load.
+            barrier.dstStageMask |= vk::PipelineStageFlagBits2::eEarlyFragmentTests |
+                                    vk::PipelineStageFlagBits2::eLateFragmentTests;
+            barrier.dstAccessMask |= vk::AccessFlagBits2::eDepthStencilAttachmentRead |
+                                     vk::AccessFlagBits2::eDepthStencilAttachmentWrite;
+        }
+    }
     cmdbuf.pipelineBarrier2(dep_info);
 
     memory_barrier.srcStageMask = vk::PipelineStageFlagBits2::eNone;
