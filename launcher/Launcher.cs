@@ -83,6 +83,8 @@ namespace NhlPort
             { "lod_bias_desc", new[] { "Čistejšie detaily dresov a ľadu.", "Crisper jersey and ice details." } },
             { "aniso", new[] { "16x anizotropné filtrovanie", "16x anisotropic filtering" } },
             { "aniso_desc", new[] { "Ostrejšie textúry pod uhlom (ľad, mantinely). Prakticky bez straty FPS.", "Sharper textures at an angle (ice, boards). Virtually no FPS cost." } },
+            { "vsync_label", new[] { "VSync (bez trhania obrazu)", "VSync (no screen tearing)" } },
+            { "aniso_label", new[] { "16x anizotropné filtrovanie (ostrejší ľad a mantinely)", "16x anisotropic filtering (sharper ice & boards)" } },
             { "vsync", new[] { "VSync", "VSync" } },
             { "vsync_desc", new[] { "Synchronizácia s obnovovacou frekvenciou (bez trhania, mierne vyššia odozva).", "Synchronises with the refresh rate (no tearing, slightly more input lag)." } },
             { "redzone", new[] { "Ochrana red zone (Windows)", "Red zone protection (Windows)" } },
@@ -1337,16 +1339,24 @@ namespace NhlPort
             fullscreenModeBox.Items.AddRange(new object[] { Loc.T("borderless"), Loc.T("exclusive") });
             fullscreenModeBox.SelectedIndex = displayModeBox.SelectedIndex == 2 ? 1 : 0;
             displayTab.Controls.Add(fullscreenModeBox);
+            var toolTip = new ToolTip { AutoPopDelay = 10000, InitialDelay = 400, ReshowDelay = 200, ShowAlways = true };
+
             y += 40;
-            vsyncBox = new CheckBox { Left = 20, Top = y, Width = 500, ForeColor = Color.White, BackColor = Color.Transparent, Font = Theme.Body, Text = Loc.T("vsync") + " – " + Loc.T("vsync_desc"), Checked = vsyncQuick.Checked };
+            vsyncBox = new CheckBox { Left = 20, Top = y, Width = 500, ForeColor = Color.White, BackColor = Color.Transparent, Font = Theme.Body, Text = Loc.T("vsync_label"), Checked = vsyncQuick.Checked };
             displayTab.Controls.Add(vsyncBox);
+            toolTip.SetToolTip(vsyncBox, Loc.T("vsync_desc"));
+
             bool anisoChecked = Convert.ToInt32(LauncherValue("anisotropic_filtering", GpuValue("anisotropic_filtering", 16))) > 0;
-            anisoBox = new CheckBox { Left = 550, Top = y, Width = 520, ForeColor = Color.White, BackColor = Color.Transparent, Font = Theme.Body, Text = Loc.T("aniso") + " – " + Loc.T("aniso_desc"), Checked = anisoChecked };
+            anisoBox = new CheckBox { Left = 550, Top = y, Width = 520, ForeColor = Color.White, BackColor = Color.Transparent, Font = Theme.Body, Text = Loc.T("aniso_label"), Checked = anisoChecked };
             displayTab.Controls.Add(anisoBox);
+            toolTip.SetToolTip(anisoBox, Loc.T("aniso_desc"));
+
             y += 35;
             stretchBox = new CheckBox { Left = 20, Top = y, Width = 500, ForeColor = Color.White, BackColor = Color.Transparent, Font = Theme.Body,
-                Text = Loc.T("stretch_to_fill") + " – " + Loc.T("stretch_to_fill_desc"), Checked = Convert.ToBoolean(GpuValue("stretch_to_fill", false)) };
+                Text = Loc.T("stretch_to_fill"), Checked = Convert.ToBoolean(GpuValue("stretch_to_fill", false)) };
             displayTab.Controls.Add(stretchBox);
+            toolTip.SetToolTip(stretchBox, Loc.T("stretch_to_fill_desc"));
+
             float advLod = Convert.ToSingle(LauncherValue("mip_lod_bias", GpuValue("mip_lod_bias", -0.10f)), System.Globalization.CultureInfo.InvariantCulture);
             int advLodIdx = (Math.Abs(advLod - 0.0f) < 0.04f) ? 0 : (advLod <= -0.20f ? 2 : 1);
             var lodLbl = new Label { Left = 550, Top = y + 3, Width = 175, ForeColor = Color.White, BackColor = Color.Transparent, Font = Theme.Body, Text = Loc.T("lod_bias") };
@@ -1356,6 +1366,8 @@ namespace NhlPort
             lodBiasBox.SelectedIndex = advLodIdx;
             displayTab.Controls.Add(lodLbl);
             displayTab.Controls.Add(lodBiasBox);
+            toolTip.SetToolTip(lodBiasBox, Loc.T("lod_bias_desc"));
+            toolTip.SetToolTip(lodLbl, Loc.T("lod_bias_desc"));
             y += 45;
             var fsrGroup = new GroupBox { Left = 20, Top = y, Width = 510, Height = 210, ForeColor = Color.White, Font = Theme.Body, Text = Loc.T("fsr_group") };
             fsrBox = new CheckBox { Left = 15, Top = 25, Width = 470, ForeColor = Color.White, Text = Loc.T("fsr_box"), Checked = Convert.ToBoolean(GpuValue("fsr_enabled", false)) };
