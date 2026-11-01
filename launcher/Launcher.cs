@@ -82,7 +82,7 @@ namespace NhlPort
             { "lod_bias_2", new[] { "Ostrá (-0.25)", "Sharp (-0.25)" } },
             { "lod_bias_desc", new[] { "Čistejšie detaily dresov a ľadu.", "Crisper jersey and ice details." } },
             { "aniso", new[] { "16x anizotropné filtrovanie", "16x anisotropic filtering" } },
-            { "aniso_desc", new[] { "Ostrejšie textúry pod uhlom (ľad, mantinely). Prakticky bez straty FPS.", "Sharper textures at an angle (ice, boards). Almost free." } },
+            { "aniso_desc", new[] { "Ostrejšie textúry pod uhlom (ľad, mantinely). Prakticky bez straty FPS.", "Sharper textures at an angle (ice, boards). Virtually no FPS cost." } },
             { "vsync", new[] { "VSync", "VSync" } },
             { "vsync_desc", new[] { "Synchronizácia s obnovovacou frekvenciou (bez trhania, mierne vyššia odozva).", "Synchronises with the refresh rate (no tearing, slightly more input lag)." } },
             { "redzone", new[] { "Ochrana red zone (Windows)", "Red zone protection (Windows)" } },
