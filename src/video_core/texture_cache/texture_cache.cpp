@@ -1151,18 +1151,21 @@ void TextureCache::ApplyTextureOverride(Image& image) {
         info.props.is_volume || image.usage.render_target) {
         return;
     }
+    // If this image already had its content hash computed, do not re-download / re-hash.
+    if (image.content_hash != 0) {
+        return;
+    }
     const auto& cfg = GetTextureOverrideCfg();
     if (!cfg.enabled || cfg.overrides.empty()) {
         return;
     }
     const u32 w = info.size.width;
     const u32 h = info.size.height;
-    const bool is_ui_cand = (w <= 512 && h <= 512 && w >= 32 && h >= 32 && (w == h || (w == 256 && h == 512) || (w == 512 && h == 256)));
     static const bool log_all = [] {
         const char* v = std::getenv("NHLPORT_LOG_BIND");
         return v && *v && *v != '0';
     }();
-    if (!is_ui_cand && cfg.target_dims.count((w << 16) | h) == 0 && !log_all) {
+    if (cfg.target_dims.count((w << 16) | h) == 0 && !log_all) {
         return;
     }
 
@@ -1192,12 +1195,15 @@ void TextureCache::ApplyTextureOverride(Image& image) {
 
     const u8* data = reinterpret_cast<const u8*>(download.mapped);
     const u64 hash = XXH3_64bits(data, mip0_size);
-    image.content_hash = hash;
+    image.content_hash = hash ? hash : 1ULL;
 
-    if (is_ui_cand) {
-        LOG_INFO(Render, "UI tex {}x{} format {} hash {:016x} (override: {})", w, h, vk::to_string(info.pixel_format), hash, cfg.overrides.count(hash) != 0);
-    } else {
-        LOG_INFO(Render, "Gear/Jersey tex {}x{} format {} hash {:016x} (override: {})", w, h, vk::to_string(info.pixel_format), hash, cfg.overrides.count(hash) != 0);
+    const bool is_ui_cand = (w <= 512 && h <= 512 && w >= 32 && h >= 32 && (w == h || (w == 256 && h == 512) || (w == 512 && h == 256)));
+    if (log_all) {
+        if (is_ui_cand) {
+            LOG_INFO(Render, "UI tex {}x{} format {} hash {:016x} (override: {})", w, h, vk::to_string(info.pixel_format), hash, cfg.overrides.count(hash) != 0);
+        } else {
+            LOG_INFO(Render, "Gear/Jersey tex {}x{} format {} hash {:016x} (override: {})", w, h, vk::to_string(info.pixel_format), hash, cfg.overrides.count(hash) != 0);
+        }
     }
 
     auto it = cfg.overrides.find(hash);
