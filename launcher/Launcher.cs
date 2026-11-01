@@ -83,6 +83,9 @@ namespace NhlPort
             { "lod_bias_desc", new[] { "Čistejšie detaily dresov a ľadu.", "Crisper jersey and ice details." } },
             { "aniso", new[] { "16x anizotropné filtrovanie", "16x anisotropic filtering" } },
             { "aniso_desc", new[] { "Ostrejšie textúry pod uhlom (ľad, mantinely). Prakticky bez straty FPS.", "Sharper textures at an angle (ice, boards). Virtually no FPS cost." } },
+            { "neo_mode_label", new[] { "PS4 Pro režim (vyššia kvalita grafiky)", "PS4 Pro mode (higher quality graphics)" } },
+            { "neo_mode_desc", new[] { "Zapína vylepšenú grafiku Frostbite enginu pre PS4 Pro (vyššie rozlíšenie tieňov a odleskov). Vypni pre základný PS4 režim.",
+                                      "Enables enhanced Frostbite engine graphics for PS4 Pro (higher resolution shadows & reflections). Uncheck for standard base PS4 mode." } },
             { "vsync_label", new[] { "VSync (bez trhania obrazu)", "VSync (no screen tearing)" } },
             { "aniso_label", new[] { "16x anizotropné filtrovanie (ostrejší ľad a mantinely)", "16x anisotropic filtering (sharper ice & boards)" } },
             { "vsync", new[] { "VSync", "VSync" } },
@@ -545,6 +548,7 @@ namespace NhlPort
         CheckBox fullscreenBox;
         ComboBox fullscreenModeBox;
         CheckBox vsyncBox;
+        CheckBox neoBox;
         CheckBox stretchBox;
         CheckBox fsrBox;
         CheckBox rcasBox;
@@ -994,6 +998,7 @@ namespace NhlPort
             // Windows static guest red-zone protection of the emulator (src/core/cpu_patches.cpp): fixes the
             // crash while a match loads when a page-protection fault clobbers the red zone of a leaf function.
             General["redzone_patches"] = redzoneQuick.Checked;
+            General["neo_mode"] = neoBox != null ? neoBox.Checked : ToBool(GeneralValue("neo_mode", true), true);
             var ser = new JavaScriptSerializer();
             Directory.CreateDirectory(Path.GetDirectoryName(configPath));
             File.WriteAllText(configPath, PrettyJson(ser.Serialize(config)), new UTF8Encoding(false));
@@ -1334,12 +1339,18 @@ namespace NhlPort
             y += 40;
             fullscreenBox = new CheckBox { Left = 20, Top = y, Width = 300, ForeColor = Color.White, BackColor = Color.Transparent, Font = Theme.Body, Text = Loc.T("borderless").Split('(')[0].Trim(), Checked = displayModeBox.SelectedIndex != 0 };
             displayTab.Controls.Add(fullscreenBox);
-            fullscreenModeBox = new ComboBox { Left = 330, Top = y - 3, Width = 260, DropDownStyle = ComboBoxStyle.DropDownList };
+            fullscreenModeBox = new ComboBox { Left = 330, Top = y - 3, Width = 210, DropDownStyle = ComboBoxStyle.DropDownList };
             Theme.Style(fullscreenModeBox);
             fullscreenModeBox.Items.AddRange(new object[] { Loc.T("borderless"), Loc.T("exclusive") });
             fullscreenModeBox.SelectedIndex = displayModeBox.SelectedIndex == 2 ? 1 : 0;
             displayTab.Controls.Add(fullscreenModeBox);
             var toolTip = new ToolTip { AutoPopDelay = 10000, InitialDelay = 400, ReshowDelay = 200, ShowAlways = true };
+
+            bool neoChecked = ToBool(GeneralValue("neo_mode", true), true);
+            neoBox = new CheckBox { Left = 550, Top = y, Width = 520, ForeColor = Color.White, BackColor = Color.Transparent, Font = Theme.Body, Text = Loc.T("neo_mode_label"), Checked = neoChecked };
+            displayTab.Controls.Add(neoBox);
+            toolTip.SetToolTip(neoBox, Loc.T("neo_mode_desc"));
+            neoBox.CheckedChanged += delegate { RefreshSummary(); };
 
             y += 40;
             vsyncBox = new CheckBox { Left = 20, Top = y, Width = 500, ForeColor = Color.White, BackColor = Color.Transparent, Font = Theme.Body, Text = Loc.T("vsync_label"), Checked = vsyncQuick.Checked };
@@ -1604,6 +1615,7 @@ namespace NhlPort
             parts.Add(displayModeBox.SelectedIndex >= 0 ? (string)displayModeBox.Items[displayModeBox.SelectedIndex] : "");
             parts.Add(upscalerBox.SelectedIndex >= 0 ? (string)upscalerBox.Items[upscalerBox.SelectedIndex] : "");
             parts.Add(Loc.T("vsync") + (vsyncQuick.Checked ? " ✓" : " ✗"));
+            parts.Add((neoBox != null ? neoBox.Checked : ToBool(GeneralValue("neo_mode", true), true)) ? "PS4 PRO" : "BASE PS4");
             if (stretchQuick != null && stretchQuick.Checked) parts.Add("21:9 FILL");
             if (redzoneQuick != null && redzoneQuick.Checked) parts.Add(Loc.T("redzone_short"));
             summaryLabel.Text = string.Join("   •   ", parts.ToArray()).ToUpperInvariant();
