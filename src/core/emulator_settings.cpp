@@ -15,6 +15,9 @@
 #include "emulator_state.h"
 
 #include <SDL3/SDL_messagebox.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 using json = nlohmann::json;
 
@@ -403,6 +406,20 @@ bool EmulatorSettingsImpl::Load(const std::string& serial) {
                 mergeGroup(m_audio, "Audio");
                 mergeGroup(m_gpu, "GPU");
                 mergeGroup(m_vulkan, "Vulkan");
+
+#ifdef _WIN32
+                // When Launcher.sharpen_mode == 0 (Built-in RCAS), automatically disable the
+                // ReShade Vulkan layer so nhl24.exe can be launched directly without stacking shaders.
+                if (gj.contains("Launcher") && gj["Launcher"].is_object()) {
+                    const auto& lj = gj["Launcher"];
+                    if (lj.contains("sharpen_mode") && lj["sharpen_mode"].is_number_integer()) {
+                        if (lj["sharpen_mode"].get<int>() == 0) {
+                            SetEnvironmentVariableA("DISABLE_VK_LAYER_reshade_1", "1");
+                            SetEnvironmentVariableA("DISABLE_VULKAN_RESHADE_LAYER_1", "1");
+                        }
+                    }
+                }
+#endif
             } else {
                 if (std::filesystem::exists(Common::FS::GetUserPath(Common::FS::PathType::UserDir) /
                                             "config.toml")) {
