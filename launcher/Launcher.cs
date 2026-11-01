@@ -549,8 +549,8 @@ namespace NhlPort
         TrackBar sharpnessBar;
         Label sharpnessLabel;
         CheckBox dlssBox;
-        CheckBox anisoQuick, anisoBox;
-        ComboBox lodBiasQuick, lodBiasBox;
+        CheckBox anisoBox;
+        ComboBox lodBiasBox;
         ComboBox dlssQualityBox;
         TrackBar dlssSharpnessBar;
         ComboBox sharpenModeBox, quickSharpenBox;
@@ -973,10 +973,10 @@ namespace NhlPort
             Gpu["dlss_quality"] = dlssQualityVal;
             Gpu["dlss_sharpness"] = sharpenModeBox.SelectedIndex == 1 ? 0 : dlssSharpnessBar.Value;
             Gpu["stretch_to_fill"] = stretchBox != null ? stretchBox.Checked : Convert.ToBoolean(GpuValue("stretch_to_fill", false));
-            Gpu["anisotropic_filtering"] = (anisoBox != null ? anisoBox.Checked : (anisoQuick != null ? anisoQuick.Checked : true)) ? 16 : 0;
-            Launcher["anisotropic_filtering"] = (anisoBox != null ? anisoBox.Checked : (anisoQuick != null ? anisoQuick.Checked : true)) ? 16 : 0;
+            Gpu["anisotropic_filtering"] = (anisoBox != null ? anisoBox.Checked : Convert.ToInt32(LauncherValue("anisotropic_filtering", 16)) > 0) ? 16 : 0;
+            Launcher["anisotropic_filtering"] = (anisoBox != null ? anisoBox.Checked : Convert.ToInt32(LauncherValue("anisotropic_filtering", 16)) > 0) ? 16 : 0;
             float lodVal = 0.0f;
-            int chosenLodIdx = lodBiasBox != null ? lodBiasBox.SelectedIndex : (lodBiasQuick != null ? lodBiasQuick.SelectedIndex : 1);
+            int chosenLodIdx = lodBiasBox != null ? lodBiasBox.SelectedIndex : 1;
             if (chosenLodIdx == 1) lodVal = -0.10f;
             else if (chosenLodIdx == 2) lodVal = -0.25f;
             else lodVal = 0.0f;
@@ -1206,22 +1206,6 @@ namespace NhlPort
             quickPanel.Controls.Add(redzoneQuick);
             quickPanel.Controls.Add(new TransparentLabel { Left = c2, Top = y + 24, Width = cw + 30, Height = 36, Font = Theme.Small, ForeColor = Color.FromArgb(200, 210, 225), Text = Loc.T("redzone_desc") });
             redzoneQuick.CheckedChanged += delegate { RefreshSummary(); };
-            y += 66;
-            bool anisoChecked = Convert.ToInt32(LauncherValue("anisotropic_filtering", GpuValue("anisotropic_filtering", 16))) > 0;
-            anisoQuick = new CheckBox { Left = c1, Top = y, Width = cw + 30, Height = 24, Font = Theme.Body, ForeColor = Color.White, BackColor = Color.Transparent, Text = Loc.T("aniso"),
-                Checked = anisoChecked };
-            quickPanel.Controls.Add(anisoQuick);
-            quickPanel.Controls.Add(new TransparentLabel { Left = c1, Top = y + 24, Width = cw + 30, Height = 36, Font = Theme.Small, ForeColor = Color.FromArgb(200, 210, 225), Text = Loc.T("aniso_desc") });
-            float initialLod = Convert.ToSingle(LauncherValue("mip_lod_bias", GpuValue("mip_lod_bias", -0.10f)), System.Globalization.CultureInfo.InvariantCulture);
-            int lodInitIdx = (Math.Abs(initialLod - 0.0f) < 0.04f) ? 0 : (initialLod <= -0.20f ? 2 : 1);
-            quickPanel.Controls.Add(new TransparentLabel { Left = c2, Top = y - 2, Width = cw, Height = 20, Font = Theme.Label, Text = Loc.T("lod_bias") });
-            lodBiasQuick = new ComboBox { Left = c2, Top = y + 19, Width = cw, DropDownStyle = ComboBoxStyle.DropDownList };
-            Theme.Style(lodBiasQuick);
-            lodBiasQuick.Items.AddRange(new object[] { Loc.T("lod_bias_0"), Loc.T("lod_bias_1"), Loc.T("lod_bias_2") });
-            lodBiasQuick.SelectedIndex = lodInitIdx;
-            quickPanel.Controls.Add(lodBiasQuick);
-            quickPanel.Controls.Add(new TransparentLabel { Left = c2, Top = y + 46, Width = cw, Height = 20, Font = Theme.Small, ForeColor = Color.FromArgb(200, 210, 225), Text = Loc.T("lod_bias_desc") });
-            anisoQuick.CheckedChanged += delegate { if (anisoBox != null) anisoBox.Checked = anisoQuick.Checked; RefreshSummary(); };
             stretchQuick.CheckedChanged += delegate { if (stretchBox != null) stretchBox.Checked = stretchQuick.Checked; RefreshSummary(); };
 
             // the quick controls mirror the advanced ones
@@ -1356,15 +1340,15 @@ namespace NhlPort
             y += 40;
             vsyncBox = new CheckBox { Left = 20, Top = y, Width = 500, ForeColor = Color.White, BackColor = Color.Transparent, Font = Theme.Body, Text = Loc.T("vsync") + " – " + Loc.T("vsync_desc"), Checked = vsyncQuick.Checked };
             displayTab.Controls.Add(vsyncBox);
-            anisoBox = new CheckBox { Left = 550, Top = y, Width = 520, ForeColor = Color.White, BackColor = Color.Transparent, Font = Theme.Body, Text = Loc.T("aniso") + " – " + Loc.T("aniso_desc"), Checked = anisoQuick != null ? anisoQuick.Checked : Convert.ToInt32(LauncherValue("anisotropic_filtering", GpuValue("anisotropic_filtering", 16))) > 0 };
+            bool anisoChecked = Convert.ToInt32(LauncherValue("anisotropic_filtering", GpuValue("anisotropic_filtering", 16))) > 0;
+            anisoBox = new CheckBox { Left = 550, Top = y, Width = 520, ForeColor = Color.White, BackColor = Color.Transparent, Font = Theme.Body, Text = Loc.T("aniso") + " – " + Loc.T("aniso_desc"), Checked = anisoChecked };
             displayTab.Controls.Add(anisoBox);
-            anisoBox.CheckedChanged += delegate { if (anisoQuick != null) anisoQuick.Checked = anisoBox.Checked; };
             y += 35;
-            stretchBox = new CheckBox { Left = 20, Top = y, Width = 800, ForeColor = Color.White, BackColor = Color.Transparent, Font = Theme.Body,
+            stretchBox = new CheckBox { Left = 20, Top = y, Width = 500, ForeColor = Color.White, BackColor = Color.Transparent, Font = Theme.Body,
                 Text = Loc.T("stretch_to_fill") + " – " + Loc.T("stretch_to_fill_desc"), Checked = Convert.ToBoolean(GpuValue("stretch_to_fill", false)) };
             displayTab.Controls.Add(stretchBox);
-            float advLod = lodBiasQuick != null ? 0 : Convert.ToSingle(LauncherValue("mip_lod_bias", GpuValue("mip_lod_bias", -0.10f)), System.Globalization.CultureInfo.InvariantCulture);
-            int advLodIdx = lodBiasQuick != null ? lodBiasQuick.SelectedIndex : ((Math.Abs(advLod - 0.0f) < 0.04f) ? 0 : (advLod <= -0.20f ? 2 : 1));
+            float advLod = Convert.ToSingle(LauncherValue("mip_lod_bias", GpuValue("mip_lod_bias", -0.10f)), System.Globalization.CultureInfo.InvariantCulture);
+            int advLodIdx = (Math.Abs(advLod - 0.0f) < 0.04f) ? 0 : (advLod <= -0.20f ? 2 : 1);
             var lodLbl = new Label { Left = 550, Top = y + 3, Width = 175, ForeColor = Color.White, BackColor = Color.Transparent, Font = Theme.Body, Text = Loc.T("lod_bias") };
             lodBiasBox = new ComboBox { Left = 730, Top = y, Width = 230, DropDownStyle = ComboBoxStyle.DropDownList };
             Theme.Style(lodBiasBox);
@@ -1372,8 +1356,6 @@ namespace NhlPort
             lodBiasBox.SelectedIndex = advLodIdx;
             displayTab.Controls.Add(lodLbl);
             displayTab.Controls.Add(lodBiasBox);
-            lodBiasQuick.SelectedIndexChanged += delegate { if (lodBiasBox.SelectedIndex != lodBiasQuick.SelectedIndex) lodBiasBox.SelectedIndex = lodBiasQuick.SelectedIndex; };
-            lodBiasBox.SelectedIndexChanged += delegate { if (lodBiasQuick.SelectedIndex != lodBiasBox.SelectedIndex) lodBiasQuick.SelectedIndex = lodBiasBox.SelectedIndex; };
             y += 45;
             var fsrGroup = new GroupBox { Left = 20, Top = y, Width = 510, Height = 210, ForeColor = Color.White, Font = Theme.Body, Text = Loc.T("fsr_group") };
             fsrBox = new CheckBox { Left = 15, Top = 25, Width = 470, ForeColor = Color.White, Text = Loc.T("fsr_box"), Checked = Convert.ToBoolean(GpuValue("fsr_enabled", false)) };
@@ -1998,7 +1980,7 @@ namespace NhlPort
             if (anisoBox != null)
                 psi.EnvironmentVariables["NHLPORT_FORCE_ANISO"] = anisoBox.Checked ? "16" : "0";
             float runLodVal = 0.0f;
-            int runLodIdx = lodBiasBox != null ? lodBiasBox.SelectedIndex : (lodBiasQuick != null ? lodBiasQuick.SelectedIndex : 1);
+            int runLodIdx = lodBiasBox != null ? lodBiasBox.SelectedIndex : 1;
             if (runLodIdx == 1) runLodVal = -0.10f;
             else if (runLodIdx == 2) runLodVal = -0.25f;
             else runLodVal = 0.0f;
