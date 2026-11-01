@@ -3,6 +3,9 @@
 
 #include <algorithm>
 #include <cstdlib>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include "common/logging/log.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -14,6 +17,18 @@ namespace VideoCore {
 // least n (2..16). Set to 0 to disable. Defaults to 16.0f.
 static float ForcedAnisotropy() {
     static const float value = [] {
+#ifdef _WIN32
+        char buf[32]{};
+        if (GetEnvironmentVariableA("NHLPORT_FORCE_ANISO", buf, sizeof(buf)) > 0) {
+            const float v = static_cast<float>(std::atof(buf));
+            if (v > 1.0f) {
+                LOG_INFO(Render_Vulkan, "Sampler: forced anisotropic filtering = {:.1f}x", v);
+            } else {
+                LOG_INFO(Render_Vulkan, "Sampler: forced anisotropic filtering disabled ({:.1f}x)", v);
+            }
+            return v;
+        }
+#endif
         const char* env = std::getenv("NHLPORT_FORCE_ANISO");
         const float v = env ? static_cast<float>(std::atof(env)) : 16.0f;
         if (v > 1.0f) {
@@ -30,6 +45,18 @@ static float ForcedAnisotropy() {
 // Defaults to 0.0f (disabled / vanilla PS4 texture sampling). Can be set via NHLPORT_LOD_BIAS if desired.
 static float ExtraLodBias() {
     static const float value = [] {
+#ifdef _WIN32
+        char buf[32]{};
+        if (GetEnvironmentVariableA("NHLPORT_LOD_BIAS", buf, sizeof(buf)) > 0) {
+            const float v = static_cast<float>(std::atof(buf));
+            if (v != 0.0f) {
+                LOG_INFO(Render_Vulkan, "Sampler: extra mip LOD bias = {:.2f}", v);
+            } else {
+                LOG_INFO(Render_Vulkan, "Sampler: extra mip LOD bias disabled (0.0)");
+            }
+            return v;
+        }
+#endif
         const char* env = std::getenv("NHLPORT_LOD_BIAS");
         const float v = env ? static_cast<float>(std::atof(env)) : 0.0f;
         if (v != 0.0f) {
