@@ -57,6 +57,7 @@ ImageInfo::ImageInfo(const Libraries::VideoOut::BufferAttributeGroup& group,
     num_bits = attrib.pixel_format != VideoOutFormat::A16R16G16B16Float ? 32 : 64;
     ASSERT(num_bits == 32);
 
+    alt_tile = Libraries::Kernel::sceKernelIsNeoMode() && props.is_tiled;
     guest_address = cpu_address;
     UpdateSize();
 }

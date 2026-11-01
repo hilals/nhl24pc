@@ -1735,6 +1735,7 @@ std::tuple<ImageId, int, int> TextureCache::ResolveOverlap(const ImageInfo& imag
         const bool pow2_padding_only =
             image_info.props.is_pow2 != cache_image.info.props.is_pow2 &&
             image_info.tile_mode == cache_image.info.tile_mode &&
+            image_info.alt_tile == cache_image.info.alt_tile &&
             image_info.size == cache_image.info.size &&
             image_info.pitch == cache_image.info.pitch && image_info.resources.levels == 1 &&
             cache_image.info.resources.levels == 1 && image_info.resources.layers == 1 &&
@@ -1771,7 +1772,8 @@ std::tuple<ImageId, int, int> TextureCache::ResolveOverlap(const ImageInfo& imag
 
         // Size is greater but resources are not, because the tiling mode is different.
         // Likely the address is reused for a image with a different tiling mode.
-        if (image_info.tile_mode != cache_image.info.tile_mode) {
+        if (image_info.tile_mode != cache_image.info.tile_mode ||
+            image_info.alt_tile != cache_image.info.alt_tile) {
             if (safe_to_delete) {
                 VideoCore::Perf::NoteFree(VideoCore::Perf::FreeTileMode);
                 FreeImage(cache_image_id);
