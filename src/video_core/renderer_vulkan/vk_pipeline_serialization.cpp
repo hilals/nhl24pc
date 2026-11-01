@@ -12,8 +12,8 @@
 
 namespace Serialization {
 /* You should increment versions below once corresponding serialization scheme is changed. */
-static constexpr u32 ShaderBinaryVersion = 7u;
-static constexpr u32 ShaderMetaVersion = 6u;
+static constexpr u32 ShaderBinaryVersion = 9u; // nhlport: loop fuse budget, depth/colour split
+static constexpr u32 ShaderMetaVersion = 8u; // nhlport: drop caches with broken preloads
 static constexpr u32 PipelineKeyVersion = 3u;
 } // namespace Serialization
 
@@ -138,6 +138,7 @@ bool ComputePipeline::SerializationSupport::Deserialize(Serialization::Archive& 
 }
 
 bool PipelineCache::LoadComputePipeline(Serialization::Archive& ar) {
+    ResetPreloadState();
     compute_key.Deserialize(ar);
 
     ComputePipeline::SerializationSupport sdata{};
@@ -205,7 +206,23 @@ bool GraphicsPipeline::SerializationSupport::Deserialize(Serialization::Archive&
     return true;
 }
 
+// nhlport (Vulkan validation, VUID-VkGraphicsPipelineCreateInfo-layout-07988/07990 and
+// VUID-RuntimeSpirv-OpEntryPoint-08743): a pipeline whose load failed half way used to leave its
+// stage infos/modules behind, and the next preloaded pipeline picked them up as extra stages (a
+// stray tessellation or fragment stage, every binding shifted). Such pipelines read the wrong
+// descriptors on the GPU. Start every load from a clean state.
+void PipelineCache::ResetPreloadState() {
+    infos.fill(nullptr);
+    modules.fill(nullptr);
+    fetch_shader = nullptr;
+    preload_starts.fill({});
+    for (auto& rt : preload_runtime) {
+        rt.Initialize(Shader::HwStage::Vertex, Shader::SwStage::Vertex);
+    }
+}
+
 bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
+    ResetPreloadState();
     graphics_key.Deserialize(ar);
 
     GraphicsPipeline::SerializationSupport sdata{};
@@ -227,6 +244,51 @@ bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
         Serialization::Archive meta_ar{std::move(meta_blob)};
 
         if (!LoadPipelineStage(meta_ar, stage_idx)) {
+            ResetPreloadState();
+            return false;
+        }
+    }
+
+    // nhlport: each stage's module has its descriptor bindings baked in, starting where the
+    // previous stage ended when it was compiled. The layout built below numbers them again from
+    // these infos; if a cached permutation was compiled next to a different stage the two
+    // disagree and the shader reads the wrong resources. Leave such a pipeline to the runtime.
+    Shader::Backend::Bindings expected{};
+    for (int stage_idx = 0; stage_idx < MaxShaderStages; ++stage_idx) {
+        const auto* stage_info = infos[stage_idx];
+        if (!stage_info) {
+            continue;
+        }
+        if (preload_starts[stage_idx] != expected) {
+            ++preload_binding_mismatches;
+            ResetPreloadState();
+            return false;
+        }
+        stage_info->AddBindings(expected);
+    }
+
+    // nhlport (Vulkan validation, VUID-RuntimeSpirv-OpEntryPoint-08743): with tessellation the
+    // vertex (LS) outputs and the hull inputs are sized from the LS stride the modules were
+    // compiled with, and the hull outputs / domain inputs from the control point stride. A cached
+    // combination where they differ makes the next stage read vertices that were never written
+    // (torn geometry). Leave it to the runtime.
+    {
+        constexpr auto vs = static_cast<u32>(Shader::SwStage::Vertex);
+        constexpr auto tcs = static_cast<u32>(Shader::SwStage::TessellationControl);
+        constexpr auto tes = static_cast<u32>(Shader::SwStage::TessellationEval);
+        bool tess_ok = true;
+        if (infos[tcs] && infos[vs]) {
+            tess_ok &= preload_runtime[vs].hw_stage == Shader::HwStage::Local &&
+                       preload_runtime[vs].hw.ls.ls_stride ==
+                           preload_runtime[tcs].sw.tcs.ls_stride;
+        }
+        if (infos[tcs] && infos[tes]) {
+            tess_ok &= preload_runtime[tes].sw.tes.hs_output_cp_stride ==
+                       preload_runtime[tcs].sw.tcs.hs_output_cp_stride;
+        }
+        if (!tess_ok) {
+            ++preload_binding_mismatches;
+            ResetPreloadState();
             return false;
         }
     }
@@ -287,12 +349,31 @@ bool PipelineCache::LoadPipelineStage(Serialization::Archive& ar, size_t stage) 
             }
             module = it->module;
         } else {
+            // nhlport: the slot of this index already holds another permutation (entries from
+            // different cache generations). Replacing it would pull its info from under the
+            // pipelines already built on it, so leave this pipeline to the runtime.
+            const auto& mods = it_pgm.value()->modules;
+            if (perm_idx < mods.size() && mods[perm_idx].module) {
+                LOG_WARNING(Render_Vulkan,
+                            "Cached permutation {} of {}_{:x} is taken by another one, skipping "
+                            "preload",
+                            perm_idx, program->info.hw_stage, program->info.pgm_hash);
+                return false;
+            }
             module = CompileSPV(spv, instance.GetDevice());
         }
     }
-    it_pgm.value()->InsertPermut(module, std::move(spec), perm_idx);
+    preload_starts[stage] = spec.start;
+    preload_runtime[stage] = spec.runtime_info;
+    // nhlport: the meta holds this permutation's own translation; keep it with the permutation
+    // (the first one loaded also becomes the program's info, as before).
+    std::shared_ptr<Shader::Info> own_info{};
+    if (!new_program) {
+        own_info = std::make_shared<Shader::Info>(std::move(program->info));
+    }
+    it_pgm.value()->InsertPermut(module, std::move(spec), perm_idx, std::move(own_info));
 
-    infos[stage] = &it_pgm.value()->info;
+    infos[stage] = &it_pgm.value()->InfoFor(perm_idx);
     modules[stage] = module;
     if (auto& fetch = it_pgm.value()->modules[perm_idx].spec.fetch_shader_data; !fetch.Empty()) {
         fetch_shader = &fetch;
@@ -369,6 +450,11 @@ void PipelineCache::WarmUp() {
         });
 
     LOG_INFO(Render, "Preloaded {} pipelines", num_pipelines);
+    if (preload_binding_mismatches) {
+        LOG_WARNING(Render, "{} cached pipelines skipped (stages don't match)",
+                    preload_binding_mismatches);
+    }
+    ResetPreloadState();
     if (num_total_pipelines > num_pipelines) {
         LOG_WARNING(Render, "{} stale pipelines were found. Consider re-generating the cache",
                     num_total_pipelines - num_pipelines);

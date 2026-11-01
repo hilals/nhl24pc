@@ -730,23 +730,43 @@ PipelineCache::Result PipelineCache::GetProgram(HwStage hw_stage, SwStage sw_sta
 
     vk::ShaderModule module{};
 
+    const Shader::Info* perm_info = &info;
     const auto it = std::ranges::find(program->modules, spec, &Program::Module::spec);
     if (it == program->modules.end()) {
-        auto new_info = Shader::Info(hw_stage, sw_stage, params);
-        module = CompileModule(new_info, runtime_info, params.code, perm_idx, binding);
+        auto new_info = std::make_shared<Shader::Info>(hw_stage, sw_stage, params);
+        module = CompileModule(*new_info, runtime_info, params.code, perm_idx, binding);
+        new_info->RefreshFlatBuf();
+        if (new_info->buffers.size() != info.buffers.size() ||
+            new_info->images.size() != info.images.size() ||
+            new_info->samplers.size() != info.samplers.size()) {
+            LOG_WARNING(Render_Vulkan,
+                        "{} shader {:#x} permutation {} has its own resources (buffers {}/{}, "
+                        "images {}/{}, samplers {}/{})",
+                        hw_stage, params.hash, perm_idx, new_info->buffers.size(),
+                        info.buffers.size(), new_info->images.size(), info.images.size(),
+                        new_info->samplers.size(), info.samplers.size());
+        }
 
-        RegisterShaderMeta(info, spec.fetch_shader_data, spec, perm_hash, perm_idx);
-        program->AddPermut(module, std::move(spec));
+        RegisterShaderMeta(*new_info, spec.fetch_shader_data, spec, perm_hash, perm_idx);
+        perm_info = new_info.get();
+        program->AddPermut(module, std::move(spec), std::move(new_info));
     } else {
-        info.AddBindings(binding);
-        module = it->module;
         perm_idx = std::distance(program->modules.begin(), it);
         perm_hash = HashCombine(params.hash, perm_idx);
+        auto& own = program->InfoFor(perm_idx);
+        if (&own != &info) {
+            own.pgm_base = params.Base();
+            own.user_data = params.user_data;
+            own.RefreshFlatBuf();
+        }
+        own.AddBindings(binding);
+        perm_info = &own;
+        module = it->module;
     }
     if (auto& fetch = program->modules[perm_idx].spec.fetch_shader_data; !fetch.Empty()) {
         fetch_shader = &fetch;
     }
-    return std::make_tuple(&program->info, module, perm_hash);
+    return std::make_tuple(perm_info, module, perm_hash);
 }
 
 std::optional<vk::ShaderModule> PipelineCache::ReplaceShader(vk::ShaderModule module,
