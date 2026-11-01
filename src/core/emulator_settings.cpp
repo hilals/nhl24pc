@@ -419,6 +419,25 @@ bool EmulatorSettingsImpl::Load(const std::string& serial) {
                         }
                     }
                 }
+
+                // Read Anisotropic Filtering setting from config.json (checked in GPU and Launcher)
+                int aniso_val = -1;
+                if (gj.contains("GPU") && gj["GPU"].is_object()) {
+                    const auto& gpu_j = gj["GPU"];
+                    if (gpu_j.contains("anisotropic_filtering") && gpu_j["anisotropic_filtering"].is_number_integer()) {
+                        aniso_val = gpu_j["anisotropic_filtering"].get<int>();
+                    }
+                }
+                if (aniso_val < 0 && gj.contains("Launcher") && gj["Launcher"].is_object()) {
+                    const auto& lj = gj["Launcher"];
+                    if (lj.contains("anisotropic_filtering") && lj["anisotropic_filtering"].is_number_integer()) {
+                        aniso_val = lj["anisotropic_filtering"].get<int>();
+                    }
+                }
+                if (aniso_val >= 0) {
+                    std::string aniso_str = std::to_string(aniso_val);
+                    SetEnvironmentVariableA("NHLPORT_FORCE_ANISO", aniso_str.c_str());
+                }
 #endif
             } else {
                 if (std::filesystem::exists(Common::FS::GetUserPath(Common::FS::PathType::UserDir) /

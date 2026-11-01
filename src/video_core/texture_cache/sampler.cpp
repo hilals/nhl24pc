@@ -11,24 +11,32 @@
 namespace VideoCore {
 
 // nhlport: NHLPORT_FORCE_ANISO=<n> raises anisotropic filtering of trilinear colour samplers to at
-// least n (2..16). Defaults to 16.0f for PC GPUs with headroom. Set to 0 to disable.
+// least n (2..16). Set to 0 to disable. Defaults to 16.0f.
 static float ForcedAnisotropy() {
     static const float value = [] {
         const char* env = std::getenv("NHLPORT_FORCE_ANISO");
         const float v = env ? static_cast<float>(std::atof(env)) : 16.0f;
-        LOG_INFO(Render_Vulkan, "Sampler: forced anisotropic filtering = {:.1f}x", v);
+        if (v > 1.0f) {
+            LOG_INFO(Render_Vulkan, "Sampler: forced anisotropic filtering = {:.1f}x", v);
+        } else {
+            LOG_INFO(Render_Vulkan, "Sampler: forced anisotropic filtering disabled ({:.1f}x)", v);
+        }
         return v;
     }();
     return value;
 }
 
 // nhlport: NHLPORT_LOD_BIAS=<f> adds f to the mip LOD bias of the same samplers (negative = sharper).
-// Defaults to -0.25f for sharp mip sampling with DLSS.
+// Defaults to 0.0f (disabled / vanilla PS4 texture sampling). Can be set via NHLPORT_LOD_BIAS if desired.
 static float ExtraLodBias() {
     static const float value = [] {
         const char* env = std::getenv("NHLPORT_LOD_BIAS");
-        const float v = env ? static_cast<float>(std::atof(env)) : -0.25f;
-        LOG_INFO(Render_Vulkan, "Sampler: extra mip LOD bias = {:.2f}", v);
+        const float v = env ? static_cast<float>(std::atof(env)) : 0.0f;
+        if (v != 0.0f) {
+            LOG_INFO(Render_Vulkan, "Sampler: extra mip LOD bias = {:.2f}", v);
+        } else {
+            LOG_INFO(Render_Vulkan, "Sampler: extra mip LOD bias disabled (0.0)");
+        }
         return v;
     }();
     return value;
