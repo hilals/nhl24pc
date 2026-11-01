@@ -76,7 +76,12 @@ namespace NhlPort
             { "sharpen_builtin", new[] { "Vstavané (RCAS)", "Built-in (RCAS)" } },
             { "sharpen_reshade", new[] { "ReShade (vlastné efekty)", "ReShade (your own effects)" } },
             { "sharpen_reshade_missing", new[] { "ReShade nie je nainštalovaný (reshade.me).", "ReShade is not installed (reshade.me)." } },
-                        { "aniso", new[] { "16x anizotropné filtrovanie", "16x anisotropic filtering" } },
+                        { "lod_bias", new[] { "Ostrosť textúr (LOD):", "Texture crispness (LOD):" } },
+            { "lod_bias_0", new[] { "Štandardná (0.0)", "Standard (0.0)" } },
+            { "lod_bias_1", new[] { "Jemná (-0.10) [Odporúčané]", "Subtle (-0.10) [Recommended]" } },
+            { "lod_bias_2", new[] { "Ostrá (-0.25)", "Sharp (-0.25)" } },
+            { "lod_bias_desc", new[] { "Čistejšie detaily dresov a ľadu.", "Crisper jersey and ice details." } },
+            { "aniso", new[] { "16x anizotropné filtrovanie", "16x anisotropic filtering" } },
             { "aniso_desc", new[] { "Ostrejšie textúry pod uhlom (ľad, mantinely). Prakticky bez straty FPS.", "Sharper textures at an angle (ice, boards). Almost free." } },
             { "vsync", new[] { "VSync", "VSync" } },
             { "vsync_desc", new[] { "Synchronizácia s obnovovacou frekvenciou (bez trhania, mierne vyššia odozva).", "Synchronises with the refresh rate (no tearing, slightly more input lag)." } },
@@ -545,6 +550,7 @@ namespace NhlPort
         Label sharpnessLabel;
         CheckBox dlssBox;
         CheckBox anisoQuick, anisoBox;
+        ComboBox lodBiasQuick, lodBiasBox;
         ComboBox dlssQualityBox;
         TrackBar dlssSharpnessBar;
         ComboBox sharpenModeBox, quickSharpenBox;
@@ -969,6 +975,13 @@ namespace NhlPort
             Gpu["stretch_to_fill"] = stretchBox != null ? stretchBox.Checked : Convert.ToBoolean(GpuValue("stretch_to_fill", false));
             Gpu["anisotropic_filtering"] = (anisoBox != null ? anisoBox.Checked : (anisoQuick != null ? anisoQuick.Checked : true)) ? 16 : 0;
             Launcher["anisotropic_filtering"] = (anisoBox != null ? anisoBox.Checked : (anisoQuick != null ? anisoQuick.Checked : true)) ? 16 : 0;
+            float lodVal = 0.0f;
+            int chosenLodIdx = lodBiasBox != null ? lodBiasBox.SelectedIndex : (lodBiasQuick != null ? lodBiasQuick.SelectedIndex : 1);
+            if (chosenLodIdx == 1) lodVal = -0.10f;
+            else if (chosenLodIdx == 2) lodVal = -0.25f;
+            else lodVal = 0.0f;
+            Gpu["mip_lod_bias"] = lodVal;
+            Launcher["mip_lod_bias"] = lodVal;
             int currentVblank = Convert.ToInt32(GpuValue("vblank_frequency", 120));
             Gpu["vblank_frequency"] = currentVblank > 0 ? currentVblank : 120;
             Launcher["language"] = Loc.Lang;
@@ -1199,6 +1212,15 @@ namespace NhlPort
                 Checked = anisoChecked };
             quickPanel.Controls.Add(anisoQuick);
             quickPanel.Controls.Add(new TransparentLabel { Left = c1, Top = y + 24, Width = cw + 30, Height = 36, Font = Theme.Small, ForeColor = Color.FromArgb(200, 210, 225), Text = Loc.T("aniso_desc") });
+            float initialLod = Convert.ToSingle(LauncherValue("mip_lod_bias", GpuValue("mip_lod_bias", -0.10f)), System.Globalization.CultureInfo.InvariantCulture);
+            int lodInitIdx = (Math.Abs(initialLod - 0.0f) < 0.04f) ? 0 : (initialLod <= -0.20f ? 2 : 1);
+            quickPanel.Controls.Add(new TransparentLabel { Left = c2, Top = y - 2, Width = cw, Height = 20, Font = Theme.Label, Text = Loc.T("lod_bias") });
+            lodBiasQuick = new ComboBox { Left = c2, Top = y + 19, Width = cw, DropDownStyle = ComboBoxStyle.DropDownList };
+            Theme.Style(lodBiasQuick);
+            lodBiasQuick.Items.AddRange(new object[] { Loc.T("lod_bias_0"), Loc.T("lod_bias_1"), Loc.T("lod_bias_2") });
+            lodBiasQuick.SelectedIndex = lodInitIdx;
+            quickPanel.Controls.Add(lodBiasQuick);
+            quickPanel.Controls.Add(new TransparentLabel { Left = c2, Top = y + 46, Width = cw, Height = 20, Font = Theme.Small, ForeColor = Color.FromArgb(200, 210, 225), Text = Loc.T("lod_bias_desc") });
             anisoQuick.CheckedChanged += delegate { if (anisoBox != null) anisoBox.Checked = anisoQuick.Checked; RefreshSummary(); };
             stretchQuick.CheckedChanged += delegate { if (stretchBox != null) stretchBox.Checked = stretchQuick.Checked; RefreshSummary(); };
 
@@ -1341,6 +1363,17 @@ namespace NhlPort
             stretchBox = new CheckBox { Left = 20, Top = y, Width = 800, ForeColor = Color.White, BackColor = Color.Transparent, Font = Theme.Body,
                 Text = Loc.T("stretch_to_fill") + " – " + Loc.T("stretch_to_fill_desc"), Checked = Convert.ToBoolean(GpuValue("stretch_to_fill", false)) };
             displayTab.Controls.Add(stretchBox);
+            float advLod = lodBiasQuick != null ? 0 : Convert.ToSingle(LauncherValue("mip_lod_bias", GpuValue("mip_lod_bias", -0.10f)), System.Globalization.CultureInfo.InvariantCulture);
+            int advLodIdx = lodBiasQuick != null ? lodBiasQuick.SelectedIndex : ((Math.Abs(advLod - 0.0f) < 0.04f) ? 0 : (advLod <= -0.20f ? 2 : 1));
+            var lodLbl = new Label { Left = 550, Top = y + 3, Width = 175, ForeColor = Color.White, BackColor = Color.Transparent, Font = Theme.Body, Text = Loc.T("lod_bias") };
+            lodBiasBox = new ComboBox { Left = 730, Top = y, Width = 230, DropDownStyle = ComboBoxStyle.DropDownList };
+            Theme.Style(lodBiasBox);
+            lodBiasBox.Items.AddRange(new object[] { Loc.T("lod_bias_0"), Loc.T("lod_bias_1"), Loc.T("lod_bias_2") });
+            lodBiasBox.SelectedIndex = advLodIdx;
+            displayTab.Controls.Add(lodLbl);
+            displayTab.Controls.Add(lodBiasBox);
+            lodBiasQuick.SelectedIndexChanged += delegate { if (lodBiasBox.SelectedIndex != lodBiasQuick.SelectedIndex) lodBiasBox.SelectedIndex = lodBiasQuick.SelectedIndex; };
+            lodBiasBox.SelectedIndexChanged += delegate { if (lodBiasQuick.SelectedIndex != lodBiasBox.SelectedIndex) lodBiasQuick.SelectedIndex = lodBiasBox.SelectedIndex; };
             y += 45;
             var fsrGroup = new GroupBox { Left = 20, Top = y, Width = 510, Height = 210, ForeColor = Color.White, Font = Theme.Body, Text = Loc.T("fsr_group") };
             fsrBox = new CheckBox { Left = 15, Top = 25, Width = 470, ForeColor = Color.White, Text = Loc.T("fsr_box"), Checked = Convert.ToBoolean(GpuValue("fsr_enabled", false)) };
@@ -1964,6 +1997,12 @@ namespace NhlPort
                 psi.EnvironmentVariables["DISABLE_VK_LAYER_reshade_1"] = "1";
             if (anisoBox != null)
                 psi.EnvironmentVariables["NHLPORT_FORCE_ANISO"] = anisoBox.Checked ? "16" : "0";
+            float runLodVal = 0.0f;
+            int runLodIdx = lodBiasBox != null ? lodBiasBox.SelectedIndex : (lodBiasQuick != null ? lodBiasQuick.SelectedIndex : 1);
+            if (runLodIdx == 1) runLodVal = -0.10f;
+            else if (runLodIdx == 2) runLodVal = -0.25f;
+            else runLodVal = 0.0f;
+            psi.EnvironmentVariables["NHLPORT_LOD_BIAS"] = runLodVal.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
             Process.Start(psi);
             Close();
         }

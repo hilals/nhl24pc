@@ -438,6 +438,29 @@ bool EmulatorSettingsImpl::Load(const std::string& serial) {
                     std::string aniso_str = std::to_string(aniso_val);
                     SetEnvironmentVariableA("NHLPORT_FORCE_ANISO", aniso_str.c_str());
                 }
+
+                // Read Mip LOD Bias setting from config.json (checked in GPU and Launcher)
+                float lod_bias_val = 0.0f;
+                bool lod_found = false;
+                if (gj.contains("GPU") && gj["GPU"].is_object()) {
+                    const auto& gpu_j = gj["GPU"];
+                    if (gpu_j.contains("mip_lod_bias") && gpu_j["mip_lod_bias"].is_number()) {
+                        lod_bias_val = gpu_j["mip_lod_bias"].get<float>();
+                        lod_found = true;
+                    }
+                }
+                if (!lod_found && gj.contains("Launcher") && gj["Launcher"].is_object()) {
+                    const auto& lj = gj["Launcher"];
+                    if (lj.contains("mip_lod_bias") && lj["mip_lod_bias"].is_number()) {
+                        lod_bias_val = lj["mip_lod_bias"].get<float>();
+                        lod_found = true;
+                    }
+                }
+                if (lod_found) {
+                    char buf[32]{};
+                    snprintf(buf, sizeof(buf), "%.2f", lod_bias_val);
+                    SetEnvironmentVariableA("NHLPORT_LOD_BIAS", buf);
+                }
 #endif
             } else {
                 if (std::filesystem::exists(Common::FS::GetUserPath(Common::FS::PathType::UserDir) /
