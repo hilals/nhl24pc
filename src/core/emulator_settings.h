@@ -274,7 +274,7 @@ struct LogSettings {
     Setting<bool> separate{false}; // specific
     Setting<unsigned long long> size_limit{100_MB};
     Setting<bool> skip_duplicate{true};
-    Setting<bool> sync{false};
+    Setting<bool> sync{true};
 #ifdef _WIN32
     Setting<std::string> type{"wincolor"};
 #endif

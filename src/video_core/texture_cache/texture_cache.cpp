@@ -1153,10 +1153,6 @@ void TextureCache::ApplyTextureOverride(Image& image) {
         info.props.is_volume || image.usage.render_target) {
         return;
     }
-    // If this image already had its content hash computed, do not re-download / re-hash.
-    if (image.content_hash != 0) {
-        return;
-    }
     const auto& cfg = GetTextureOverrideCfg();
     if (!cfg.enabled || cfg.overrides.empty()) {
         return;
