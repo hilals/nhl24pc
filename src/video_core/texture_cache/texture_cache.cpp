@@ -188,6 +188,7 @@ struct TextureOverrideCfg {
     std::filesystem::path dir;
     std::unordered_map<u64, TextureOverrideEntry> overrides;
     std::unordered_set<u32> target_dims;
+    std::unordered_set<u32> target_formats;
 };
 
 const TextureOverrideCfg& GetTextureOverrideCfg() {
@@ -252,6 +253,7 @@ const TextureOverrideCfg& GetTextureOverrideCfg() {
             }
             oe.data.assign(file.begin() + data_offset, file.end());
             c.target_dims.insert((w << 16) | h);
+            c.target_formats.insert(oe.dxgi);
             c.overrides[hash] = std::move(oe);
             LOG_INFO(Render, "texture override loaded: hash {:016x} ({}x{}, mips {}, dxgi {}) from {}",
                      hash, w, h, mips, oe.dxgi, entry.path().filename().string());
@@ -1161,11 +1163,12 @@ void TextureCache::ApplyTextureOverride(Image& image) {
     }
     const u32 w = info.size.width;
     const u32 h = info.size.height;
+    const u32 dxgi = DxgiFormatFor(info.pixel_format);
     static const bool log_all = [] {
         const char* v = std::getenv("NHLPORT_LOG_BIND");
         return v && *v && *v != '0';
     }();
-    if (cfg.target_dims.count((w << 16) | h) == 0 && !log_all) {
+    if ((dxgi == 0 || cfg.target_dims.count((w << 16) | h) == 0 || cfg.target_formats.count(dxgi) == 0) && !log_all) {
         return;
     }
 
@@ -2051,11 +2054,10 @@ ImageId TextureCache::ExpandImage(const ImageInfo& info, ImageId image_id) {
 
     auto& src_image = slot_images[image_id];
     auto& new_image = slot_images[new_image_id];
+    new_image.content_hash = src_image.content_hash ? src_image.content_hash : 1ULL;
 
     RefreshImage(new_image);
     runtime.CopyImage(&src_image, &new_image);
-    ApplyTextureOverride(new_image);
-    DumpImageToDisk(new_image);
 
     if (src_image.binding.is_bound || src_image.binding.is_target) {
         src_image.binding.needs_rebind = 1u;
