@@ -9,7 +9,7 @@ implementations, and the GPU work goes through Vulkan.
 | | |
 |---|---|
 | Ready-to-run package | [`release/`](release) – `launcher.exe`, `nhl24.exe`, runtime DLLs, clean `user\` template |
-| Current build | **v0.9.0** (2026-10-30), Windows 10/11 x64 |
+| Current build | **v1.0.0** (2026-11-02), Windows 10/11 x64 |
 | Needs | your own NHL 24 PKG (base v01.00, optionally the update), a Vulkan 1.3 GPU |
 | License | GPL-2.0-or-later (same as shadPS4) |
 
@@ -19,6 +19,17 @@ implementations, and the GPU work goes through Vulkan.
 alternate jerseys with the Mammoth crest. The leftover Coyotes chest crest and shoulder patches are hidden on the
 Utah jerseys while every other team keeps its crests, and Utah's uniform records are forced to the right set. Install the textures
 from the release (`user\texture_override`); notes in `docs/UTAH_CREST_NOTES.md`.
+
+**Frame rate, display and PS4 Pro mode (v1.0.0)**
+- Frame rate cap in the launcher (60 / 90 / 120 / 144 FPS); 120 FPS runs well on a fast PC. The launcher no longer forces 60.
+- *PS4 Pro mode* checkbox in the launcher (experimental; needs a lot of video memory). The flip buffers of Pro-mode games are now
+  recognised, which fixes the black screen and flicker the mode used to show.
+- Dynamic resolution is switched off by a game patch (`game_patches/nhl24.xml`, 1.00 and 1.60), which removes the black columns in cutscenes.
+- 16x anisotropic filtering and a texture crispness (mip bias) option in the launcher.
+- Vulkan fixes found with the validation layer: colour views of depth images, stale stages in cached pipelines, the 16-bit shader
+  feature, wave64 scratch-store races, and a missing transfer usage on the DLSS output image.
+- Pipelines preloaded at start-up now fill the driver's pipeline cache, and texture overrides no longer cause extra GPU stalls.
+- A texel-buffer-inside-an-image case that used to abort the game mid-match is handled.
 
 **Crash and freeze fixes**
 - *Create a team* no longer crashes: the shader recompiler now handles register-indexed jump tables (`s_setpc_b64`) whose
