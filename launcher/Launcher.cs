@@ -127,6 +127,8 @@ namespace NhlPort
             { "press_key", new[] { "Stlač klávesu pre: {0}   (Esc = zrušiť)", "Press a key for: {0}   (Esc = cancel)" } },
             { "key_unusable", new[] { "Túto klávesu nie je možné použiť, skús inú.", "This key cannot be used, try another one." } },
             { "resolution", new[] { "Rozlíšenie okna / obrazovky:", "Window / screen resolution:" } },
+            { "fps_cap", new[] { "Limit FPS:", "Frame rate cap (FPS):" } },
+            { "fps_cap_desc", new[] { "Maximálna snímková frekvencia hry. 120 vyžaduje rýchly procesor; ak je hra nerovnomerná, skúste 60 alebo 90.", "Maximum frame rate of the game. 120 needs a fast CPU; if frames are uneven, try 60 or 90." } },
             { "fsr_group", new[] { "AMD FidelityFX Super Resolution (FSR)", "AMD FidelityFX Super Resolution (FSR)" } },
             { "fsr_box", new[] { "FSR upscaling na rozlíšenie okna", "FSR upscaling to the window resolution" } },
             { "rcas_box", new[] { "RCAS zaostrenie", "RCAS sharpening" } },
@@ -545,6 +547,7 @@ namespace NhlPort
         Label captureLabel;
         PadAction capturing;
         ComboBox resolutionBox;
+        ComboBox fpsCapBox;
         CheckBox fullscreenBox;
         ComboBox fullscreenModeBox;
         CheckBox vsyncBox;
@@ -988,8 +991,9 @@ namespace NhlPort
             else lodVal = 0.0f;
             Gpu["mip_lod_bias"] = lodVal;
             Launcher["mip_lod_bias"] = lodVal;
-            int currentVblank = Convert.ToInt32(GpuValue("vblank_frequency", 120));
-            Gpu["vblank_frequency"] = currentVblank > 0 ? currentVblank : 120;
+            int fpsCap = 60;
+            if (fpsCapBox == null || !int.TryParse(fpsCapBox.Text.Trim(), out fpsCap)) fpsCap = Convert.ToInt32(GpuValue("vblank_frequency", 60));
+            Gpu["vblank_frequency"] = Math.Max(30, Math.Min(240, fpsCap));
             Launcher["language"] = Loc.Lang;
             // Sharpening source: 0 = built-in RCAS pass (ReShade disabled for the game), 1 = ReShade
             // (the built-in sharpness is written as 0 so the two never stack; the slider value is kept).
@@ -1336,6 +1340,12 @@ namespace NhlPort
             resolutionBox.Items.AddRange(new object[] { "1280 x 720", "1600 x 900", "1920 x 1080", "2560 x 1440", "3440 x 1440", "3840 x 2160" });
             resolutionBox.Text = outputBox.Text;
             displayTab.Controls.Add(resolutionBox);
+            displayTab.Controls.Add(new Label { Left = 570, Top = y, Width = 190, ForeColor = Color.White, BackColor = Color.Transparent, Font = Theme.Body, Text = Loc.T("fps_cap") });
+            fpsCapBox = new ComboBox { Left = 770, Top = y - 3, Width = 90, DropDownStyle = ComboBoxStyle.DropDown };
+            Theme.Style(fpsCapBox);
+            fpsCapBox.Items.AddRange(new object[] { "60", "90", "120", "144" });
+            fpsCapBox.Text = Convert.ToString(GpuValue("vblank_frequency", 60));
+            displayTab.Controls.Add(fpsCapBox);
             y += 40;
             fullscreenBox = new CheckBox { Left = 20, Top = y, Width = 300, ForeColor = Color.White, BackColor = Color.Transparent, Font = Theme.Body, Text = Loc.T("borderless").Split('(')[0].Trim(), Checked = displayModeBox.SelectedIndex != 0 };
             displayTab.Controls.Add(fullscreenBox);
@@ -1345,6 +1355,7 @@ namespace NhlPort
             fullscreenModeBox.SelectedIndex = displayModeBox.SelectedIndex == 2 ? 1 : 0;
             displayTab.Controls.Add(fullscreenModeBox);
             var toolTip = new ToolTip { AutoPopDelay = 10000, InitialDelay = 400, ReshowDelay = 200, ShowAlways = true };
+            toolTip.SetToolTip(fpsCapBox, Loc.T("fps_cap_desc"));
 
             bool neoChecked = ToBool(GeneralValue("neo_mode", true), true);
             neoBox = new CheckBox { Left = 550, Top = y, Width = 520, ForeColor = Color.White, BackColor = Color.Transparent, Font = Theme.Body, Text = Loc.T("neo_mode_label"), Checked = neoChecked };

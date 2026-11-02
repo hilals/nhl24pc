@@ -30,4 +30,61 @@
       <Line Type="byte" Address="0x068E0770" Value="0xEB"/>
     </PatchList>
   </Metadata>
+  <!--
+    Dynamic resolution off (01.00). GameRenderSettings.DynamicResolutionScaleEnable (field 0x16E): the
+    cutscene camera renders at a changing resolution (1600x904, 1624x912, ...) and whole 64-pixel columns of the
+    lit scene come out black (see docs/DEVLOG.sk.md, "Znamy problem - ciene obdlniky v prestrihoch").
+    Four code sites, found by byte signature (idea and signatures: NHL24PC V3.2 by LEVASTAK, GPL-2.0):
+    1) constructor default 1 -> 0, 2-3) member-wise copies read 0, 4) render loop: the regulator jne is NOPed.
+    Address = 0x400000 + eboot image offset, same convention as the replay patch above.
+  -->
+  <Metadata Name="Dynamic resolution off (fixes black columns in cutscenes)" isEnabled="true" AppVer="01.00" AppElf="eboot.bin" Author="nhlport">
+    <PatchList>
+      <Line Type="byte" Address="0x022C5992" Value="0x00"/>
+      <Line Type="byte" Address="0x05FB7734" Value="0x31"/>
+      <Line Type="byte" Address="0x05FB7735" Value="0xC0"/>
+      <Line Type="byte" Address="0x05FB7736" Value="0x90"/>
+      <Line Type="byte" Address="0x05FB7737" Value="0x90"/>
+      <Line Type="byte" Address="0x05FB7738" Value="0x90"/>
+      <Line Type="byte" Address="0x05FB7739" Value="0x90"/>
+      <Line Type="byte" Address="0x0516E337" Value="0x31"/>
+      <Line Type="byte" Address="0x0516E338" Value="0xC9"/>
+      <Line Type="byte" Address="0x0516E339" Value="0x0F"/>
+      <Line Type="byte" Address="0x0516E33A" Value="0x1F"/>
+      <Line Type="byte" Address="0x0516E33B" Value="0x44"/>
+      <Line Type="byte" Address="0x05E44C39" Value="0x66"/>
+      <Line Type="byte" Address="0x05E44C3A" Value="0x0F"/>
+      <Line Type="byte" Address="0x05E44C3B" Value="0x1F"/>
+      <Line Type="byte" Address="0x05E44C3C" Value="0x44"/>
+    </PatchList>
+  </Metadata>
+  <!--
+    Dynamic resolution off (01.60). GameRenderSettings.DynamicResolutionScaleEnable (field 0x16E): the
+    cutscene camera renders at a changing resolution (1600x904, 1624x912, ...) and whole 64-pixel columns of the
+    lit scene come out black (see docs/DEVLOG.sk.md, "Znamy problem - ciene obdlniky v prestrihoch").
+    Four code sites, found by byte signature (idea and signatures: NHL24PC V3.2 by LEVASTAK, GPL-2.0):
+    1) constructor default 1 -> 0, 2-3) member-wise copies read 0, 4) render loop: the regulator jne is NOPed.
+    Address = 0x400000 + eboot image offset, same convention as the replay patch above.
+  -->
+  <Metadata Name="Dynamic resolution off (fixes black columns in cutscenes)" isEnabled="true" AppVer="01.60" AppElf="eboot.bin" Author="nhlport">
+    <PatchList>
+      <Line Type="byte" Address="0x0224641B" Value="0x00"/>
+      <Line Type="byte" Address="0x05FDE7A4" Value="0x31"/>
+      <Line Type="byte" Address="0x05FDE7A5" Value="0xC0"/>
+      <Line Type="byte" Address="0x05FDE7A6" Value="0x90"/>
+      <Line Type="byte" Address="0x05FDE7A7" Value="0x90"/>
+      <Line Type="byte" Address="0x05FDE7A8" Value="0x90"/>
+      <Line Type="byte" Address="0x05FDE7A9" Value="0x90"/>
+      <Line Type="byte" Address="0x0517F247" Value="0x31"/>
+      <Line Type="byte" Address="0x0517F248" Value="0xC9"/>
+      <Line Type="byte" Address="0x0517F249" Value="0x0F"/>
+      <Line Type="byte" Address="0x0517F24A" Value="0x1F"/>
+      <Line Type="byte" Address="0x0517F24B" Value="0x44"/>
+      <Line Type="byte" Address="0x05E71A65" Value="0x66"/>
+      <Line Type="byte" Address="0x05E71A66" Value="0x0F"/>
+      <Line Type="byte" Address="0x05E71A67" Value="0x1F"/>
+      <Line Type="byte" Address="0x05E71A68" Value="0x44"/>
+    </PatchList>
+  </Metadata>
+
 </Patch>
