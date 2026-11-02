@@ -28,7 +28,7 @@ from the release (`user\texture_override`); notes in `docs/UTAH_CREST_NOTES.md`.
 - 16x anisotropic filtering and a texture crispness (mip bias) option in the launcher.
 - Vulkan fixes found with the validation layer: colour views of depth images, stale stages in cached pipelines, the 16-bit shader
   feature, wave64 scratch-store races, and a missing transfer usage on the DLSS output image.
-- Pipelines preloaded at start-up now fill the driver's pipeline cache, and texture overrides no longer cause extra GPU stalls.
+- Pipelines preloaded at start-up now fill the driver's pipeline cache.
 - A texel-buffer-inside-an-image case that used to abort the game mid-match is handled.
 
 **Crash and freeze fixes**
