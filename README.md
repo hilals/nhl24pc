@@ -9,7 +9,7 @@ implementations, and the GPU work goes through Vulkan.
 | | |
 |---|---|
 | Ready-to-run package | [`release/`](release) – `launcher.exe`, `nhl24.exe`, runtime DLLs, clean `user\` template |
-| Current build | **v1.0.0** (2026-11-02), Windows 10/11 x64 |
+| Current build | **v1.0.1** (2026-11-03), Windows 10/11 x64 |
 | Needs | your own NHL 24 PKG (base v01.00, optionally the update), a Vulkan 1.3 GPU |
 | License | GPL-2.0-or-later (same as shadPS4) |
 
@@ -32,6 +32,9 @@ from the release (`user\texture_override`); notes in `docs/UTAH_CREST_NOTES.md`.
 - A texel-buffer-inside-an-image case that used to abort the game mid-match is handled.
 
 **Crash and freeze fixes**
+- *Freezes every few seconds (v1.0.1):* the Utah uniform patch searched all of the game's memory about every 3 s while holding the
+  memory manager's lock, so every memory map/unmap the game made waited for it and the whole game froze for up to a second. The search now
+  copies the memory in pieces without holding the lock; the patch itself is unchanged. Short hitches while a match loads can remain.
 - *Create a team* no longer crashes: the shader recompiler now handles register-indexed jump tables (`s_setpc_b64`) whose
   index register is overwritten before the jump, by copying the index to a spare register.
 - *Be a Pro* crash fixed by the same jump-table expansion (it runs before the control-flow graph is built).

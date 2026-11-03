@@ -6,6 +6,6 @@
 // Version of the NHL 24 PC port (shown in the window title and the launcher).
 #define NHLPORT_VERSION_MAJOR 1
 #define NHLPORT_VERSION_MINOR 0
-#define NHLPORT_VERSION_PATCH 0
-#define NHLPORT_VERSION "1.0.0"
+#define NHLPORT_VERSION_PATCH 1
+#define NHLPORT_VERSION "1.0.1"
 #define NHLPORT_TITLE "NHL24 PC v" NHLPORT_VERSION
