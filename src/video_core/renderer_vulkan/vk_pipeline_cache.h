@@ -135,7 +135,13 @@ private:
         return num_new_pipelines > 0;
     }
 
+    // The driver's own compiled-pipeline cache, kept in <cache dir>/<serial>.vkcache between runs so the
+    // start-up warm-up does not have to recompile every saved pipeline in the driver.
+    std::vector<u8> LoadDriverCacheFile() const;
+    void SaveDriverCacheFile();
+
 private:
+    size_t driver_cache_loaded_size{};
     const Instance& instance;
     Scheduler& scheduler;
     AmdGpu::Liverpool* liverpool;

@@ -2,7 +2,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include "common/diag_log.h"
+#include "common/elf_info.h"
 #include <ranges>
 
 #include "common/hash.h"
@@ -342,15 +345,91 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         .needs_clip_distance_emulation = instance.GetDriverID() == vk::DriverId::eNvidiaProprietary,
         .supports_shader_stencil_export = instance_.IsShaderStencilExportSupported(),
     };
-    auto [cache_result, cache] = instance.GetDevice().createPipelineCacheUnique({});
-    ASSERT_MSG(cache_result == vk::Result::eSuccess, "Failed to create pipeline cache: {}",
-               vk::to_string(cache_result));
-    pipeline_cache = std::move(cache);
+    const std::vector<u8> driver_cache = LoadDriverCacheFile();
+    vk::PipelineCacheCreateInfo cache_info{};
+    if (!driver_cache.empty()) {
+        cache_info.initialDataSize = driver_cache.size();
+        cache_info.pInitialData = driver_cache.data();
+    }
+    auto created = instance.GetDevice().createPipelineCacheUnique(cache_info);
+    if (created.result != vk::Result::eSuccess && !driver_cache.empty()) {
+        LOG_WARNING(Render_Vulkan, "The saved driver pipeline cache was rejected ({}), starting empty",
+                    vk::to_string(created.result));
+        created = instance.GetDevice().createPipelineCacheUnique({});
+    } else {
+        driver_cache_loaded_size = driver_cache.size();
+    }
+    ASSERT_MSG(created.result == vk::Result::eSuccess, "Failed to create pipeline cache: {}",
+               vk::to_string(created.result));
+    pipeline_cache = std::move(created.value);
 
+    const auto warmup_start = std::chrono::steady_clock::now();
     WarmUp();
+    LOG_INFO(Render_Vulkan, "Pipeline warm-up took {} ms (saved driver cache: {} KB)",
+             std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
+                                                                   warmup_start)
+                 .count(),
+             driver_cache_loaded_size / 1024);
+    // Everything the warm-up compiled is in the driver cache now: keep it for the next start.
+    SaveDriverCacheFile();
 }
 
 PipelineCache::~PipelineCache() = default;
+
+static std::filesystem::path DriverCacheFilePath() {
+    return Common::FS::GetUserPath(Common::FS::PathType::CacheDir) /
+           (std::string{Common::ElfInfo::Instance().GameSerial()} + ".vkcache");
+}
+
+std::vector<u8> PipelineCache::LoadDriverCacheFile() const {
+    if (!EmulatorSettings.IsPipelineCacheEnabled()) {
+        return {};
+    }
+    std::error_code ec;
+    const auto path = DriverCacheFilePath();
+    const auto size = std::filesystem::file_size(path, ec);
+    if (ec || size == 0 || size > (1ull << 31)) {
+        return {};
+    }
+    std::vector<u8> data(static_cast<size_t>(size));
+    std::ifstream file{path, std::ios::binary};
+    if (!file || !file.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(size))) {
+        LOG_WARNING(Render_Vulkan, "Could not read the driver pipeline cache {}", path.string());
+        return {};
+    }
+    return data;
+}
+
+void PipelineCache::SaveDriverCacheFile() {
+    if (!EmulatorSettings.IsPipelineCacheEnabled()) {
+        return;
+    }
+    auto [result, data] = instance.GetDevice().getPipelineCacheData(*pipeline_cache);
+    if (result != vk::Result::eSuccess || data.empty() || data.size() == driver_cache_loaded_size) {
+        return; // nothing new compiled since the file was loaded
+    }
+    // Write a temporary file and rename it, so a crash or power loss never leaves a half-written cache.
+    const auto path = DriverCacheFilePath();
+    auto tmp = path;
+    tmp += ".tmp";
+    std::error_code ec;
+    {
+        std::ofstream file{tmp, std::ios::binary | std::ios::trunc};
+        if (!file || !file.write(reinterpret_cast<const char*>(data.data()),
+                                 static_cast<std::streamsize>(data.size()))) {
+            LOG_WARNING(Render_Vulkan, "Could not write the driver pipeline cache {}", tmp.string());
+            return;
+        }
+    }
+    std::filesystem::rename(tmp, path, ec);
+    if (ec) {
+        LOG_WARNING(Render_Vulkan, "Could not replace the driver pipeline cache: {}", ec.message());
+        std::filesystem::remove(tmp, ec);
+        return;
+    }
+    driver_cache_loaded_size = data.size();
+    LOG_INFO(Render_Vulkan, "Saved the driver pipeline cache ({} KB)", data.size() / 1024);
+}
 
 const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectParams params) {
     draw_indirect_params = params;
