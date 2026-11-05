@@ -6,48 +6,66 @@ that extracts the game from your own PKG and starts it. No console, no CPU emula
 code runs directly on your processor, the PS4 system libraries are replaced by native Windows
 implementations, and the GPU work goes through Vulkan.
 
+> **Not the same as the other NHL 24 forks.** This one started from [HajDEO/nhl24pc](https://github.com/HajDEO/nhl24pc) v0.8.3 and adds
+> **NVIDIA DLSS (Super Resolution and DLAA) with ultrawide support, a frame rate cap up to 144 FPS, an experimental PS4 Pro mode,
+> a fix for the black bars in cutscenes, the Utah Mammoth with a full roster**, plus many crash and freeze fixes and a start-up that
+> went from about 105 s to about 15 s on the test PC. The table below lists everything that is different.
+
 | | |
 |---|---|
-| Ready-to-run package | [`release/`](release) – `launcher.exe`, `nhl24.exe`, runtime DLLs, clean `user\` template |
-| Current build | **v1.0.1** (2026-11-03), Windows 10/11 x64 |
-| Needs | your own NHL 24 PKG (base v01.00, optionally the update), a Vulkan 1.3 GPU |
+| Download | **[Latest release](https://github.com/hilals/nhl24pc/releases/latest)** – the ready-to-run zip has `launcher.exe`, `nhl24.exe`, the DLSS files and a clean `user\` template |
+| Current build | **v1.0.1** (2026-11-04), Windows 10/11 x64 |
+| Needs | your own NHL 24 PKG (base v01.00, optionally the 1.60 update), a Vulkan 1.3 GPU; an NVIDIA RTX card for DLSS |
+| Tested on | mainly one PC (Core i9-13900KF, RTX 4090, 3440x1440, 120 FPS cap); reports from other hardware are welcome |
 | License | GPL-2.0-or-later (same as shadPS4) |
 
 ## What this fork adds (vs. HajDEO/nhl24pc v0.8.3)
+
+| Area | What you get |
+|---|---|
+| **NVIDIA DLSS** | DLSS Super Resolution and DLAA on RTX 20/30/40/50 cards (NVIDIA NGX, `nvngx_dlss.dll` 310.9.16 in the package). Quality modes DLAA, Quality, Balanced, Performance and Ultra Performance, chosen in the launcher. The game renders at its native 1920x1080 like the PS4 and DLSS upscales to your window or screen. AMD and older NVIDIA cards can use FSR instead. |
+| **Resolution and ultrawide** | The launcher offers output sizes from 1280x720 up to **3840x2160 (4K)**, plus 3440x1440 with 21:9 presentation and a *stretch to fill* option, so DLSS output covers the whole screen without black bars. |
+| **Frame rate cap** | 60 / 90 / 120 / 144 FPS in the launcher (earlier versions forced 60). 120 FPS is the setting used for most of the testing. |
+| **PS4 Pro mode** | A checkbox in the launcher that makes the game run its PS4 Pro path. Experimental and needs plenty of video memory. The game's Pro-mode flip buffers are now recognised, which fixed the black screen and flicker the mode used to show. |
+| **Cutscenes** | Dynamic resolution is switched off by a game patch, which removes the black columns on the right side of cutscenes (game versions 1.00 and 1.60). |
+| **Utah Mammoth + roster** | Arizona becomes the Utah Mammoth everywhere: names, team select and the home, away and alternate jerseys with the Mammoth crest. A full custom roster for all 32 teams with real line combinations, and an installer. See below. |
+| **Image quality** | 16x anisotropic filtering, a texture crispness (mip bias) option, per-player portrait pictures for created players and players without a photo. |
+| **Stability** | *Create a team* and *Be a Pro* no longer crash; a mid-match abort caused by a texture/buffer overlap is handled; the 1.60 first-faceoff freeze has a patch entry; Vulkan validation fixes (see below). |
+| **Smoothness** | A search that froze the game for up to a second about every 3 s is gone (it held the memory lock), and the driver's compiled-pipeline cache is kept between runs, so start-up no longer recompiles every saved shader. |
+| **Diagnostics** | A built-in diagnostics suite (frame time log with the cause of each stutter, draw log, captures) that is off by default, switched on with `NHLPORT_DIAG=1`. |
 
 **Utah Mammoth.** Arizona becomes the Utah Mammoth everywhere in the game: name and team select, and the home, away and
 alternate jerseys with the Mammoth crest. The leftover Coyotes chest crest and shoulder patches are hidden on the
 Utah jerseys while every other team keeps its crests, and Utah's uniform records are forced to the right set. Install the textures
 from the release (`user\texture_override`); notes in `docs/UTAH_CREST_NOTES.md`.
 
-**Frame rate, display and PS4 Pro mode (v1.0.0)**
-- Frame rate cap in the launcher (60 / 90 / 120 / 144 FPS); 120 FPS runs well on a fast PC. The launcher no longer forces 60.
-- *PS4 Pro mode* checkbox in the launcher (experimental; needs a lot of video memory). The flip buffers of Pro-mode games are now
-  recognised, which fixes the black screen and flicker the mode used to show.
-- Dynamic resolution is switched off by a game patch (`game_patches/nhl24.xml`, 1.00 and 1.60), which removes the black columns in cutscenes.
-- 16x anisotropic filtering and a texture crispness (mip bias) option in the launcher.
-- Vulkan fixes found with the validation layer: colour views of depth images, stale stages in cached pipelines, the 16-bit shader
-  feature, wave64 scratch-store races, and a missing transfer usage on the DLSS output image.
-- Pipelines preloaded at start-up now fill the driver's pipeline cache.
-- A texel-buffer-inside-an-image case that used to abort the game mid-match is handled.
+**Vulkan and shader fixes (v1.0.0):** colour views of depth images, stale stages in cached pipelines, the 16-bit shader feature,
+wave64 scratch-store races and a missing transfer usage on the DLSS output image, all found with the Vulkan validation layer.
+Pipelines preloaded at start-up now fill the driver's pipeline cache.
 
-**Crash and freeze fixes**
-- *Slow start-up (v1.0.1):* the driver's compiled-pipeline cache is now kept between runs (`user\cache\<serial>.vkcache`). Before, every start made the graphics driver recompile all saved pipelines, which took about 100 s with a big cache; on the test PC the first frame now appears after about 15 s. The first start after updating still builds the cache once, and the file is safe to delete.
-- *Freezes every few seconds (v1.0.1):* the Utah uniform patch searched all of the game's memory about every 3 s while holding the
-  memory manager's lock, so every memory map/unmap the game made waited for it and the whole game froze for up to a second. The search now
-  copies the memory in pieces without holding the lock; the patch itself is unchanged. Short hitches while a match loads can remain.
+**Slow start-up and freezes (v1.0.1)**
+- The driver's compiled-pipeline cache is now kept between runs (`user\cache\<serial>.vkcache`, about 50 MB). Before, every start made the
+  graphics driver recompile all saved pipelines, which took about 105 s with about 3,000 cached shaders; the first frame now appears after about 15 s.
+  The first start after updating still builds the cache once, and the file is safe to delete.
+- The Utah uniform patch used to search all of the game's memory about every 3 s while holding the memory manager's lock, so every
+  memory map/unmap the game made waited for it and the whole game froze for up to a second. The search now copies the memory in pieces
+  without holding the lock; the patch itself is unchanged. Short hitches while a match loads can remain.
+
+**Crash fixes**
 - *Create a team* no longer crashes: the shader recompiler now handles register-indexed jump tables (`s_setpc_b64`) whose
   index register is overwritten before the jump, by copying the index to a spare register.
 - *Be a Pro* crash fixed by the same jump-table expansion (it runs before the control-flow graph is built).
-- Texture cache recovers from an equal-address image overlap instead of aborting.
-- The 1.60 update's first-faceoff freeze has a patch entry in `game_patches/nhl24.xml`.
+- Texture cache recovers from an equal-address image overlap, and from a texel buffer that starts inside an image, instead of aborting.
 - The texture dumper no longer switches itself on (only with `NHLPORT_DUMP_TEXTURES`).
 
-**Graphics and portraits**
-- NVIDIA DLSS 5 support (Super Resolution and DLAA) with 21:9 ultrawide presentation.
-- Per-player portrait pictures for created players and players without a photo (`user\portrait_override\<player id>.dds`).
-
 Releases contain the jersey textures and a ready roster with its installer. Everything is for personal use with your own copy of the game.
+
+## Credits
+
+- [HajDEO](https://github.com/HajDEO/nhl24pc) – the original NHL 24 port this fork is based on.
+- The [shadPS4](https://github.com/shadps4-emu/shadPS4) team and contributors – the emulator.
+- LEVASTAK's NHL24PC V3.2 (GPL-2.0) – the idea and byte signatures of the dynamic-resolution patch.
+- NVIDIA – DLSS and the NGX runtime (`nvngx_dlss.dll` is NVIDIA's redistributable). DLSS is a trademark of NVIDIA.
 
 ## How it works
 
@@ -76,7 +94,7 @@ CPU directly, at native speed. What the emulator provides is everything around i
 
 ## Support
 
-If this fork is useful to you (crash fixes and roster tooling), you can support my work:
+If this fork is useful to you (DLSS, frame rate, Pro mode, crash fixes and roster tooling), you can support my work:
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/hishak)
 
@@ -84,12 +102,13 @@ The NHL 24 port itself is the work of the original author, [HajDEO](https://gith
 
 ## Playing
 
-1. Download the repository (green **Code → Download ZIP**), unpack the ZIP and open its `release`
-   folder – everything you need is there (`launcher.exe`, `nhl24.exe`, runtime DLLs, `user\`). Keep the
-   unpacked folder somewhere you can write to (not Program Files).
+1. Download `NHL24-PC-v…-ready-to-run.zip` from the [latest release](https://github.com/hilals/nhl24pc/releases/latest) and unpack it –
+   everything you need is there (`launcher.exe`, `nhl24.exe`, the DLSS files, runtime DLLs, `user\`). Keep the
+   unpacked folder somewhere you can write to (not Program Files). (The repository's `release\` folder has no DLSS files; use the zip for DLSS.)
 2. Start `launcher.exe`. Click **Install PKG** and pick your NHL 24 **base game** package (v01.00).
-   **Do not install the update PKG**: the port needs game version 1.00; with the 1.6 update the game
-   freezes at the first puck drop (issue #1). The launcher checks the title ID (CUSA37933) and the kind
+   The base game works as it is. The 1.60 update also runs, with the patches in `game_patches/nhl24.xml`
+   (they remove the first-faceoff freeze and the dynamic resolution that causes black bars in cutscenes).
+   The launcher checks the title ID (CUSA37933) and the kind
    of package, shows size and version, and extracts into `game\` next to the launcher, with progress.
 3. Press **PLAY**. Simple view = the settings most people touch; Advanced = everything, including the
    keyboard mapping and the game folder.
