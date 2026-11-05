@@ -15,6 +15,9 @@
 #include "emulator_state.h"
 
 #include <SDL3/SDL_messagebox.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 using json = nlohmann::json;
 
@@ -403,6 +406,62 @@ bool EmulatorSettingsImpl::Load(const std::string& serial) {
                 mergeGroup(m_audio, "Audio");
                 mergeGroup(m_gpu, "GPU");
                 mergeGroup(m_vulkan, "Vulkan");
+
+#ifdef _WIN32
+                // When Launcher.sharpen_mode == 0 (Built-in RCAS), automatically disable the
+                // ReShade Vulkan layer so nhl24.exe can be launched directly without stacking shaders.
+                if (gj.contains("Launcher") && gj["Launcher"].is_object()) {
+                    const auto& lj = gj["Launcher"];
+                    if (lj.contains("sharpen_mode") && lj["sharpen_mode"].is_number_integer()) {
+                        if (lj["sharpen_mode"].get<int>() == 0) {
+                            SetEnvironmentVariableA("DISABLE_VK_LAYER_reshade_1", "1");
+                            SetEnvironmentVariableA("DISABLE_VULKAN_RESHADE_LAYER_1", "1");
+                        }
+                    }
+                }
+
+                // Read Anisotropic Filtering setting from config.json (checked in GPU and Launcher)
+                int aniso_val = -1;
+                if (gj.contains("GPU") && gj["GPU"].is_object()) {
+                    const auto& gpu_j = gj["GPU"];
+                    if (gpu_j.contains("anisotropic_filtering") && gpu_j["anisotropic_filtering"].is_number_integer()) {
+                        aniso_val = gpu_j["anisotropic_filtering"].get<int>();
+                    }
+                }
+                if (aniso_val < 0 && gj.contains("Launcher") && gj["Launcher"].is_object()) {
+                    const auto& lj = gj["Launcher"];
+                    if (lj.contains("anisotropic_filtering") && lj["anisotropic_filtering"].is_number_integer()) {
+                        aniso_val = lj["anisotropic_filtering"].get<int>();
+                    }
+                }
+                if (aniso_val >= 0) {
+                    std::string aniso_str = std::to_string(aniso_val);
+                    SetEnvironmentVariableA("NHLPORT_FORCE_ANISO", aniso_str.c_str());
+                }
+
+                // Read Mip LOD Bias setting from config.json (checked in GPU and Launcher)
+                float lod_bias_val = 0.0f;
+                bool lod_found = false;
+                if (gj.contains("GPU") && gj["GPU"].is_object()) {
+                    const auto& gpu_j = gj["GPU"];
+                    if (gpu_j.contains("mip_lod_bias") && gpu_j["mip_lod_bias"].is_number()) {
+                        lod_bias_val = gpu_j["mip_lod_bias"].get<float>();
+                        lod_found = true;
+                    }
+                }
+                if (!lod_found && gj.contains("Launcher") && gj["Launcher"].is_object()) {
+                    const auto& lj = gj["Launcher"];
+                    if (lj.contains("mip_lod_bias") && lj["mip_lod_bias"].is_number()) {
+                        lod_bias_val = lj["mip_lod_bias"].get<float>();
+                        lod_found = true;
+                    }
+                }
+                if (lod_found) {
+                    char buf[32]{};
+                    snprintf(buf, sizeof(buf), "%.2f", lod_bias_val);
+                    SetEnvironmentVariableA("NHLPORT_LOD_BIAS", buf);
+                }
+#endif
             } else {
                 if (std::filesystem::exists(Common::FS::GetUserPath(Common::FS::PathType::UserDir) /
                                             "config.toml")) {

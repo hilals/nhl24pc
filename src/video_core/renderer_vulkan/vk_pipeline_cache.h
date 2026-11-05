@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <memory>
 #include <variant>
 #include <tsl/robin_map.h>
 #include "shader_recompiler/profile.h"
@@ -46,6 +47,7 @@ struct Program {
     struct Module {
         vk::ShaderModule module;
         Shader::StageSpecialization spec;
+        std::shared_ptr<Shader::Info> own_info{};
     };
     static constexpr size_t MaxPermutations = 8;
     using ModuleList = boost::container::small_vector<Module, MaxPermutations>;
@@ -57,14 +59,24 @@ struct Program {
     Program(Shader::HwStage stage, Shader::SwStage l_stage, Shader::ShaderParams params)
         : info{stage, l_stage, params} {}
 
-    void AddPermut(vk::ShaderModule module, Shader::StageSpecialization&& spec) {
-        modules.emplace_back(module, std::move(spec));
+    void AddPermut(vk::ShaderModule module, Shader::StageSpecialization&& spec,
+                   std::shared_ptr<Shader::Info> own_info = {}) {
+        modules.emplace_back(module, std::move(spec), std::move(own_info));
     }
 
     void InsertPermut(vk::ShaderModule module, Shader::StageSpecialization&& spec,
-                      size_t perm_idx) {
+                      size_t perm_idx, std::shared_ptr<Shader::Info> own_info = {}) {
         modules.resize(std::max(modules.size(), perm_idx + 1)); // <-- beware of realloc
-        modules[perm_idx] = {module, std::move(spec)};
+        auto& slot = modules[perm_idx];
+        if (slot.module) {
+            own_info = slot.own_info;
+        }
+        slot = {module, std::move(spec), std::move(own_info)};
+    }
+
+    Shader::Info& InfoFor(size_t perm_idx) {
+        auto& own = modules[perm_idx].own_info;
+        return own ? *own : info;
     }
 };
 
@@ -85,6 +97,7 @@ public:
     bool LoadComputePipeline(Serialization::Archive& ar);
     bool LoadGraphicsPipeline(Serialization::Archive& ar);
     bool LoadPipelineStage(Serialization::Archive& ar, size_t stage);
+    void ResetPreloadState();
 
     const GraphicsPipeline* GetGraphicsPipeline(const DrawIndirectParams params = {});
 
@@ -122,7 +135,13 @@ private:
         return num_new_pipelines > 0;
     }
 
+    // The driver's own compiled-pipeline cache, kept in <cache dir>/<serial>.vkcache between runs so the
+    // start-up warm-up does not have to recompile every saved pipeline in the driver.
+    std::vector<u8> LoadDriverCacheFile() const;
+    void SaveDriverCacheFile();
+
 private:
+    size_t driver_cache_loaded_size{};
     const Instance& instance;
     Scheduler& scheduler;
     AmdGpu::Liverpool* liverpool;
@@ -139,6 +158,9 @@ private:
     std::array<const Shader::Info*, MaxShaderStages> infos{};
     std::array<vk::ShaderModule, MaxShaderStages> modules{};
     Shader::Gcn::FetchShaderData* fetch_shader{};
+    std::array<Shader::Backend::Bindings, MaxShaderStages> preload_starts{};
+    std::array<Shader::RuntimeInfo, MaxShaderStages> preload_runtime{};
+    u32 preload_binding_mismatches{};
     GraphicsPipelineKey graphics_key{};
     ComputePipelineKey compute_key{};
     u32 num_new_pipelines{}; // new pipelines added to the cache since the game start

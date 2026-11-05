@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <cstring>
+#include <vector>
 #include <codecvt>
 #include <fstream>
 #include <sstream>
@@ -422,6 +424,21 @@ static void InstallUtahBrandingHook() {
 }
 
 
+// Copies guest memory without faulting. Returns false if part of the range is no longer mapped or readable;
+// `got` is then the number of bytes copied before the problem.
+static bool SafeReadMemory(VAddr src, void* dst, size_t size, size_t& got) {
+#ifdef _WIN32
+    SIZE_T copied = 0;
+    const BOOL ok = ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<LPCVOID>(src), dst, size, &copied);
+    got = static_cast<size_t>(copied);
+    return ok != FALSE;
+#else
+    std::memcpy(dst, reinterpret_cast<const void*>(src), size);
+    got = size;
+    return true;
+#endif
+}
+
 static bool ScanAndPatchUtahUniforms() {
     auto* mem = Core::Memory::Instance();
     if (!mem) return false;
@@ -436,54 +453,85 @@ static bool ScanAndPatchUtahUniforms() {
 
     bool patched = false;
 
-    mem->ForEachReadableRange([&](VAddr base, u64 size) {
-        if (size < required_span) return;
-        const uint8_t* p = reinterpret_cast<const uint8_t*>(base);
-        const uint8_t* end = p + size - required_span;
+    // Searches one copied chunk and patches any match in the live memory it came from.
+    const auto scan_buffer = [&](const uint8_t* b, size_t n, VAddr addr0) {
+        if (n < required_span) return;
+        const uint8_t* const last = b + n - required_span;
+        for (const uint8_t* cur = b; cur <= last; ++cur) {
+            cur = static_cast<const uint8_t*>(std::memchr(cur, 0x6e, static_cast<size_t>(last - cur) + 1));
+            if (!cur) break;
+            if (std::memcmp(cur, sig403, 8) != 0 || std::memcmp(cur + stride_457, sig457, 8) != 0 ||
+                std::memcmp(cur + stride_635, sig635, 8) != 0) {
+                continue;
+            }
+            if (cur[8] == 0xf0 && cur[9] == 0x28 && cur[stride_457 + 8] == 0xf0 &&
+                cur[stride_457 + 9] == 0xe0 && cur[stride_635 + 8] == 0xf0 && cur[stride_635 + 9] == 0x28) {
+                patched = true;
+                continue;
+            }
 
-        for (const uint8_t* cur = p; cur <= end; ++cur) {
-            if (cur[0] == 0x6e && std::memcmp(cur, sig403, 8) == 0) {
-                if (std::memcmp(cur + stride_457, sig457, 8) == 0 &&
-                    std::memcmp(cur + stride_635, sig635, 8) == 0) {
-
-                    if (cur[8] == 0xf0 && cur[9] == 0x28 &&
-                        cur[stride_457 + 8] == 0xf0 && cur[stride_457 + 9] == 0xe0 &&
-                        cur[stride_635 + 8] == 0xf0 && cur[stride_635 + 9] == 0x28) {
-                        patched = true;
-                        continue;
-                    }
-
-                    uint8_t* target = const_cast<uint8_t*>(cur);
+            uint8_t* target = reinterpret_cast<uint8_t*>(addr0 + static_cast<VAddr>(cur - b));
+            static const uint8_t patch403[2] = {0xf0, 0x28};
+            static const uint8_t patch457[2] = {0xf0, 0xe0};
+            static const uint8_t patch635[2] = {0xf0, 0x28};
 #ifdef _WIN32
-                    DWORD old_protect;
-                    if (VirtualProtect(target, required_span, PAGE_EXECUTE_READWRITE, &old_protect)) {
-                        target[8] = 0xf0;
-                        target[9] = 0x28;
-
-                        target[stride_457 + 8] = 0xf0;
-                        target[stride_457 + 9] = 0xe0;
-
-                        target[stride_635 + 8] = 0xf0;
-                        target[stride_635 + 9] = 0x28;
-
-                        VirtualProtect(target, required_span, old_protect, &old_protect);
-                        LOG_INFO(Loader, "Utah uniform patch: successfully forced in-memory yUAn JOlt=120 at {:#x}",
-                                 reinterpret_cast<uintptr_t>(target));
-                        patched = true;
-                    }
-#else
-                    target[8] = 0xf0;
-                    target[9] = 0x28;
-                    target[stride_457 + 8] = 0xf0;
-                    target[stride_457 + 9] = 0xe0;
-                    target[stride_635 + 8] = 0xf0;
-                    target[stride_635 + 9] = 0x28;
+            DWORD old_protect;
+            if (VirtualProtect(target, required_span, PAGE_EXECUTE_READWRITE, &old_protect)) {
+                const HANDLE self = GetCurrentProcess();
+                SIZE_T written = 0;
+                const bool ok = WriteProcessMemory(self, target + 8, patch403, 2, &written) &&
+                                WriteProcessMemory(self, target + stride_457 + 8, patch457, 2, &written) &&
+                                WriteProcessMemory(self, target + stride_635 + 8, patch635, 2, &written);
+                VirtualProtect(target, required_span, old_protect, &old_protect);
+                if (ok) {
+                    LOG_INFO(Loader, "Utah uniform patch: successfully forced in-memory yUAn JOlt=120 at {:#x}",
+                             reinterpret_cast<uintptr_t>(target));
                     patched = true;
-#endif
                 }
             }
+#else
+            std::memcpy(target + 8, patch403, 2);
+            std::memcpy(target + stride_457 + 8, patch457, 2);
+            std::memcpy(target + stride_635 + 8, patch635, 2);
+            patched = true;
+#endif
+        }
+    };
+
+    // Snapshot the mapped ranges and release the memory manager's lock before scanning.
+    // ForEachReadableRange keeps the lock shared for as long as its callback runs, and searching every
+    // mapped byte that way took about 0.9 s each round. The game maps, unmaps and protects guest memory
+    // constantly while it loads, and every one of those calls waited for the scan, so the whole game froze for
+    // 0.4-1.3 s about every 3 s. The ranges are read in chunks through SafeReadMemory instead, which fails
+    // without faulting if a range was unmapped after the snapshot.
+    std::vector<std::pair<VAddr, u64>> ranges;
+    mem->ForEachReadableRange([&](VAddr base, u64 size) {
+        if (size >= required_span) {
+            ranges.emplace_back(base, size);
         }
     });
+
+    constexpr size_t kChunk = 1u << 20;
+    std::vector<uint8_t> buf(kChunk);
+    for (const auto& [base, size] : ranges) {
+        u64 off = 0;
+        while (off + required_span <= size) {
+            const size_t want = static_cast<size_t>(std::min<u64>(kChunk, size - off));
+            size_t got = 0;
+            const bool ok = SafeReadMemory(base + off, buf.data(), want, got);
+            scan_buffer(buf.data(), got, base + off);
+            if (!ok) {
+                // Part of the chunk is unreadable now: carry on after the bad page.
+                off = ((base + off + got + 0x1000) & ~u64{0xfff}) - base;
+                continue;
+            }
+            if (off + want >= size) {
+                break;
+            }
+            // Overlap the next chunk so a match that straddles the boundary is still found.
+            off += want - required_span + 1;
+        }
+    }
 
     return patched;
 }

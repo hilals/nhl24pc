@@ -162,7 +162,7 @@ void DlssPass::CreateOutputImages(Img& img) {
         .mipLevels = 1,
         .arrayLayers = 1,
         .samples = vk::SampleCountFlagBits::e1,
-        .usage = vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eSampled |
+        .usage = vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled |
                  vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eColorAttachment,
         .initialLayout = vk::ImageLayout::eUndefined,
     };

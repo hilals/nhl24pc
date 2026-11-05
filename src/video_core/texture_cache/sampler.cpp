@@ -2,20 +2,91 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <cstdlib>
+#ifdef _WIN32
+#include <windows.h>
+#endif
+#include "common/logging/log.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/texture_cache/sampler.h"
 
 namespace VideoCore {
 
+// nhlport: NHLPORT_FORCE_ANISO=<n> raises anisotropic filtering of trilinear colour samplers to at
+// least n (2..16). Set to 0 to disable. Defaults to 16.0f.
+static float ForcedAnisotropy() {
+    static const float value = [] {
+#ifdef _WIN32
+        char buf[32]{};
+        if (GetEnvironmentVariableA("NHLPORT_FORCE_ANISO", buf, sizeof(buf)) > 0) {
+            const float v = static_cast<float>(std::atof(buf));
+            if (v > 1.0f) {
+                LOG_INFO(Render_Vulkan, "Sampler: forced anisotropic filtering = {:.1f}x", v);
+            } else {
+                LOG_INFO(Render_Vulkan, "Sampler: forced anisotropic filtering disabled ({:.1f}x)", v);
+            }
+            return v;
+        }
+#endif
+        const char* env = std::getenv("NHLPORT_FORCE_ANISO");
+        const float v = env ? static_cast<float>(std::atof(env)) : 16.0f;
+        if (v > 1.0f) {
+            LOG_INFO(Render_Vulkan, "Sampler: forced anisotropic filtering = {:.1f}x", v);
+        } else {
+            LOG_INFO(Render_Vulkan, "Sampler: forced anisotropic filtering disabled ({:.1f}x)", v);
+        }
+        return v;
+    }();
+    return value;
+}
+
+// nhlport: NHLPORT_LOD_BIAS=<f> adds f to the mip LOD bias of the same samplers (negative = sharper).
+// Defaults to 0.0f (disabled / vanilla PS4 texture sampling). Can be set via NHLPORT_LOD_BIAS if desired.
+static float ExtraLodBias() {
+    static const float value = [] {
+#ifdef _WIN32
+        char buf[32]{};
+        if (GetEnvironmentVariableA("NHLPORT_LOD_BIAS", buf, sizeof(buf)) > 0) {
+            const float v = static_cast<float>(std::atof(buf));
+            if (v != 0.0f) {
+                LOG_INFO(Render_Vulkan, "Sampler: extra mip LOD bias = {:.2f}", v);
+            } else {
+                LOG_INFO(Render_Vulkan, "Sampler: extra mip LOD bias disabled (0.0)");
+            }
+            return v;
+        }
+#endif
+        const char* env = std::getenv("NHLPORT_LOD_BIAS");
+        const float v = env ? static_cast<float>(std::atof(env)) : 0.0f;
+        if (v != 0.0f) {
+            LOG_INFO(Render_Vulkan, "Sampler: extra mip LOD bias = {:.2f}", v);
+        } else {
+            LOG_INFO(Render_Vulkan, "Sampler: extra mip LOD bias disabled (0.0)");
+        }
+        return v;
+    }();
+    return value;
+}
+
 Sampler::Sampler(const Vulkan::Instance& instance, const AmdGpu::Sampler& sampler,
                  const AmdGpu::BorderColorBuffer border_color_base, const bool is_depth) {
     using namespace Vulkan;
-    const bool anisotropy_enable = instance.IsAnisotropicFilteringSupported() &&
-                                   (AmdGpu::IsAnisoFilter(sampler.xy_mag_filter) ||
-                                    AmdGpu::IsAnisoFilter(sampler.xy_min_filter));
+    const bool game_aniso = AmdGpu::IsAnisoFilter(sampler.xy_mag_filter) ||
+                            AmdGpu::IsAnisoFilter(sampler.xy_min_filter);
+    const float forced_aniso = ForcedAnisotropy();
+    const bool trilinear_colour = !is_depth && sampler.mip_filter == AmdGpu::MipFilter::Linear &&
+                                  sampler.xy_min_filter != AmdGpu::Filter::Point;
+    const bool force_aniso = forced_aniso > 1.0f && trilinear_colour;
+    const float max_bias = instance.MaxSamplerLodBias();
+    const float lod_bias = std::clamp(
+        sampler.LodBias() + (trilinear_colour ? ExtraLodBias() : 0.0f), -max_bias, max_bias);
+    const bool anisotropy_enable =
+        instance.IsAnisotropicFilteringSupported() && (game_aniso || force_aniso);
+    const float wanted_aniso =
+        force_aniso ? std::max(sampler.MaxAniso(), forced_aniso) : sampler.MaxAniso();
     const float max_anisotropy =
-        anisotropy_enable ? std::clamp(sampler.MaxAniso(), 1.0f, instance.MaxSamplerAnisotropy())
+        anisotropy_enable ? std::clamp(wanted_aniso, 1.0f, instance.MaxSamplerAnisotropy())
                           : 1.0f;
     auto border_color = LiverpoolToVK::BorderColor(sampler.border_color_type);
     if (border_color == vk::BorderColor::eFloatCustomEXT &&
@@ -51,7 +122,7 @@ Sampler::Sampler(const Vulkan::Instance& instance, const AmdGpu::Sampler& sample
         .addressModeU = LiverpoolToVK::ClampMode(sampler.clamp_x),
         .addressModeV = LiverpoolToVK::ClampMode(sampler.clamp_y),
         .addressModeW = LiverpoolToVK::ClampMode(sampler.clamp_z),
-        .mipLodBias = std::min(sampler.LodBias(), instance.MaxSamplerLodBias()),
+        .mipLodBias = lod_bias,
         .anisotropyEnable = anisotropy_enable,
         .maxAnisotropy = max_anisotropy,
         // GCN compares per instruction; a plain read of a compare sampler is undefined in Vulkan.

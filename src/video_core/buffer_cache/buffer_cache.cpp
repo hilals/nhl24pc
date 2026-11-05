@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <magic_enum/magic_enum.hpp>
@@ -618,10 +619,26 @@ bool BufferCache::SynchronizeMemoryFromImage(const Buffer* arena, VAddr device_a
         return false;
     }
     Image& image = texture_cache.GetImage(image_id);
-    ASSERT_MSG(device_addr == image.info.guest_address,
-               "Texel buffer aliases image subresources {:x} : {:x}", device_addr,
-               image.info.guest_address);
-    const u64 arena_offset = arena->Offset(device_addr);
+    // nhlport: NHL 24 sometimes reads a GPU-written surface as a texel buffer that starts a few
+    // bytes inside it (seen: image + 0x10 and + 0x20, when a match loads). Upstream asserted here
+    // and the game crashed. The arena maps guest memory 1:1, so write the whole image back at its
+    // own address; the buffer view then reads the right bytes at its offset.
+    // (Same fix as NHL24PC V3.2 by LEVASTAK, GPL-2.0.)
+    if (device_addr != image.info.guest_address) {
+        static std::atomic<u32> logged{0};
+        const bool in_arena = arena->IsInBounds(image.info.guest_address, image.info.guest_size);
+        if (logged.fetch_add(1, std::memory_order_relaxed) < 20) {
+            LOG_WARNING(Render_Vulkan,
+                        "Texel buffer {:#x} starts inside image {:#x} ({}x{} {}): {}", device_addr,
+                        image.info.guest_address, image.info.size.width, image.info.size.height,
+                        vk::to_string(image.info.pixel_format),
+                        in_arena ? "syncing the whole image" : "image outside the arena, skipped");
+        }
+        if (!in_arena) {
+            return false;
+        }
+    }
+    const u64 arena_offset = arena->Offset(image.info.guest_address);
     boost::container::small_vector<vk::BufferImageCopy, 8> buffer_copies;
     for (u32 mip = 0; mip < image.info.resources.levels; mip++) {
         const auto& mip_info = image.info.mips_layout[mip];

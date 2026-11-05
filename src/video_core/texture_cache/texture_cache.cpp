@@ -3,6 +3,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <string_view>
 #include <array>
 #include <span>
 #include "common/diag_log.h"
@@ -187,6 +188,7 @@ struct TextureOverrideCfg {
     std::filesystem::path dir;
     std::unordered_map<u64, TextureOverrideEntry> overrides;
     std::unordered_set<u32> target_dims;
+    std::unordered_set<u32> target_formats;
 };
 
 const TextureOverrideCfg& GetTextureOverrideCfg() {
@@ -251,6 +253,7 @@ const TextureOverrideCfg& GetTextureOverrideCfg() {
             }
             oe.data.assign(file.begin() + data_offset, file.end());
             c.target_dims.insert((w << 16) | h);
+            c.target_formats.insert(oe.dxgi);
             c.overrides[hash] = std::move(oe);
             LOG_INFO(Render, "texture override loaded: hash {:016x} ({}x{}, mips {}, dxgi {}) from {}",
                      hash, w, h, mips, oe.dxgi, entry.path().filename().string());
@@ -1156,12 +1159,12 @@ void TextureCache::ApplyTextureOverride(Image& image) {
     }
     const u32 w = info.size.width;
     const u32 h = info.size.height;
-    const bool is_ui_cand = (w <= 512 && h <= 512 && w >= 32 && h >= 32 && (w == h || (w == 256 && h == 512) || (w == 512 && h == 256)));
+    const u32 dxgi = DxgiFormatFor(info.pixel_format);
     static const bool log_all = [] {
         const char* v = std::getenv("NHLPORT_LOG_BIND");
         return v && *v && *v != '0';
     }();
-    if (!is_ui_cand && cfg.target_dims.count((w << 16) | h) == 0 && !log_all) {
+    if ((dxgi == 0 || cfg.target_dims.count((w << 16) | h) == 0 || cfg.target_formats.count(dxgi) == 0) && !log_all) {
         return;
     }
 
@@ -1191,12 +1194,15 @@ void TextureCache::ApplyTextureOverride(Image& image) {
 
     const u8* data = reinterpret_cast<const u8*>(download.mapped);
     const u64 hash = XXH3_64bits(data, mip0_size);
-    image.content_hash = hash;
+    image.content_hash = hash ? hash : 1ULL;
 
-    if (is_ui_cand) {
-        LOG_INFO(Render, "UI tex {}x{} format {} hash {:016x} (override: {})", w, h, vk::to_string(info.pixel_format), hash, cfg.overrides.count(hash) != 0);
-    } else {
-        LOG_INFO(Render, "Gear/Jersey tex {}x{} format {} hash {:016x} (override: {})", w, h, vk::to_string(info.pixel_format), hash, cfg.overrides.count(hash) != 0);
+    const bool is_ui_cand = (w <= 512 && h <= 512 && w >= 32 && h >= 32 && (w == h || (w == 256 && h == 512) || (w == 512 && h == 256)));
+    if (log_all) {
+        if (is_ui_cand) {
+            LOG_INFO(Render, "UI tex {}x{} format {} hash {:016x} (override: {})", w, h, vk::to_string(info.pixel_format), hash, cfg.overrides.count(hash) != 0);
+        } else {
+            LOG_INFO(Render, "Gear/Jersey tex {}x{} format {} hash {:016x} (override: {})", w, h, vk::to_string(info.pixel_format), hash, cfg.overrides.count(hash) != 0);
+        }
     }
 
     auto it = cfg.overrides.find(hash);
@@ -1544,6 +1550,35 @@ void TextureCache::UnmapMemory(VAddr cpu_addr, size_t size) {
     }
 }
 
+// nhlport: NHLPORT_DEPTH_COLOR_FIX=1 / 0 forces the depth-as-colour fix on / off; by default it is
+// on for PS4 Pro mode and NVIDIA Pascal (GTX 10xx, GT 10xx, MX 1xx, TITAN X/Xp, Quadro P), where
+// depth-as-colour aliasing invalidates image views and produces black frames / GPU faults.
+bool TextureCache::DepthAsColorFix() const {
+    static const bool enabled = [this] {
+        if (const char* env = std::getenv("NHLPORT_DEPTH_COLOR_FIX"); env && env[0]) {
+            return env[0] != '0';
+        }
+        if (EmulatorSettings.IsNeo()) {
+            return true;
+        }
+        if (instance.GetVendorID() == 0x10DE) {
+            const std::string_view name = instance.GetModelName();
+            for (const std::string_view key : {"GTX 10", "GT 10", "MX1", "MX 1", "MX2", "MX 2",
+                                               "TITAN X", "TITAN Xp", "Quadro P", "Tesla P"}) {
+                if (name.find(key) != std::string_view::npos) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }();
+    static std::once_flag logged;
+    std::call_once(logged, [&] {
+        LOG_INFO(Render, "depth-as-colour fix: {}", enabled ? "on" : "off");
+    });
+    return enabled;
+}
+
 ImageId TextureCache::ResolveDepthOverlap(const ImageInfo& requested_info, BindingType binding,
                                           ImageId cache_image_id) {
     auto& cache_image = slot_images[cache_image_id];
@@ -1564,6 +1599,21 @@ ImageId TextureCache::ResolveDepthOverlap(const ImageInfo& requested_info, Bindi
         // The guest requires a depth sampled texture, but cache can offer only Rxf. Need to
         // recreate the image.
         recreate |= requested_info.props.is_depth && !cache_image.info.props.is_depth;
+        // nhlport: the guest samples a depth image with a colour format that has no depth
+        // equivalent (NHL 24 aliases its depth buffer with B10G11R11 / A2B10G10R10 targets).
+        // A colour view of a depth image is invalid Vulkan: newer GPUs tolerate it, GTX 10xx
+        // (Pascal) raises "TEX FORMAT" and the device is lost. Recreate it as a colour image.
+        if (DepthAsColorFix() && cache_image.info.props.is_depth && !requested_info.props.is_depth &&
+            !Vulkan::LiverpoolToVK::IsFormatDepthCompatible(requested_info.pixel_format)) {
+            recreate = true;
+            static std::atomic<u64> n_fix{0};
+            const u64 k = n_fix.fetch_add(1, std::memory_order_relaxed);
+            if (k < 20 || k % 1000 == 0) {
+                LOG_INFO(Render, "depth-as-colour fix #{}: {} sampled as {} @ {:#x}", k,
+                         vk::to_string(cache_image.info.pixel_format),
+                         vk::to_string(requested_info.pixel_format), requested_info.guest_address);
+            }
+        }
         break;
     case BindingType::Storage:
         // If the guest is going to use previously created depth as storage, the image needs to be
@@ -1690,6 +1740,7 @@ std::tuple<ImageId, int, int> TextureCache::ResolveOverlap(const ImageInfo& imag
         const bool pow2_padding_only =
             image_info.props.is_pow2 != cache_image.info.props.is_pow2 &&
             image_info.tile_mode == cache_image.info.tile_mode &&
+            image_info.alt_tile == cache_image.info.alt_tile &&
             image_info.size == cache_image.info.size &&
             image_info.pitch == cache_image.info.pitch && image_info.resources.levels == 1 &&
             cache_image.info.resources.levels == 1 && image_info.resources.layers == 1 &&
@@ -1726,7 +1777,8 @@ std::tuple<ImageId, int, int> TextureCache::ResolveOverlap(const ImageInfo& imag
 
         // Size is greater but resources are not, because the tiling mode is different.
         // Likely the address is reused for a image with a different tiling mode.
-        if (image_info.tile_mode != cache_image.info.tile_mode) {
+        if (image_info.tile_mode != cache_image.info.tile_mode ||
+            image_info.alt_tile != cache_image.info.alt_tile) {
             if (safe_to_delete) {
                 VideoCore::Perf::NoteFree(VideoCore::Perf::FreeTileMode);
                 FreeImage(cache_image_id);
@@ -1998,11 +2050,10 @@ ImageId TextureCache::ExpandImage(const ImageInfo& info, ImageId image_id) {
 
     auto& src_image = slot_images[image_id];
     auto& new_image = slot_images[new_image_id];
+    new_image.content_hash = src_image.content_hash ? src_image.content_hash : 1ULL;
 
     RefreshImage(new_image);
     runtime.CopyImage(&src_image, &new_image);
-    ApplyTextureOverride(new_image);
-    DumpImageToDisk(new_image);
 
     if (src_image.binding.is_bound || src_image.binding.is_target) {
         src_image.binding.needs_rebind = 1u;
