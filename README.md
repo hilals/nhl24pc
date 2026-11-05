@@ -32,6 +32,7 @@ from the release (`user\texture_override`); notes in `docs/UTAH_CREST_NOTES.md`.
 - A texel-buffer-inside-an-image case that used to abort the game mid-match is handled.
 
 **Crash and freeze fixes**
+- *Slow start-up (v1.0.1):* the driver's compiled-pipeline cache is now kept between runs (`user\cache\<serial>.vkcache`). Before, every start made the graphics driver recompile all saved pipelines, which took about 100 s with a big cache; on the test PC the first frame now appears after about 15 s. The first start after updating still builds the cache once, and the file is safe to delete.
 - *Freezes every few seconds (v1.0.1):* the Utah uniform patch searched all of the game's memory about every 3 s while holding the
   memory manager's lock, so every memory map/unmap the game made waited for it and the whole game froze for up to a second. The search now
   copies the memory in pieces without holding the lock; the patch itself is unchanged. Short hitches while a match loads can remain.
