@@ -447,3 +447,6 @@ result
 /release/game/
 /release/game-UPDATE/
 /build/
+
+# Allow DLSS SDK x64 libraries
+!externals/dlss_sdk/**

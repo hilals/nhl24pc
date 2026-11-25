@@ -106,6 +106,10 @@ bool CanBlitToSwapchain(const vk::PhysicalDevice physical_device, vk::Format for
 
 static vk::Rect2D FitImage(s32 frame_width, s32 frame_height, s32 swapchain_width,
                            s32 swapchain_height) {
+    if (EmulatorSettings.IsStretchToFill()) {
+        return vk::Rect2D{{0, 0}, {static_cast<u32>(swapchain_width), static_cast<u32>(swapchain_height)}};
+    }
+
     float frame_aspect = static_cast<float>(frame_width) / frame_height;
     float swapchain_aspect = static_cast<float>(swapchain_width) / swapchain_height;
 
@@ -493,7 +497,20 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
         static_cast<float>(EmulatorSettings.GetRcasAttenuation() / 1000.f);
 
     fsr_pass.Create(device, instance.GetAllocator(), num_images);
+
+    dlss_settings.enable = EmulatorSettings.IsDlssEnabled();
+    dlss_settings.quality = EmulatorSettings.GetDlssQuality();
+    dlss_settings.sharpness = static_cast<float>(EmulatorSettings.GetDlssSharpness()) / 1000.f;
+    dlss_pass.Initialize(instance.GetInstance(), instance.GetPhysicalDevice(), device,
+                         instance.GetAllocator(), num_images);
     pp_pass.Create(device, swapchain.GetSurfaceFormat().format);
+
+    const auto extent = swapchain.GetExtent();
+    if (extent.width > 0 && extent.height > 0) {
+        SetExpectedGameSize(static_cast<s32>(extent.width), static_cast<s32>(extent.height));
+    } else if (window.GetWidth() > 0 && window.GetHeight() > 0) {
+        SetExpectedGameSize(window.GetWidth(), window.GetHeight());
+    }
 
     ImGui::Layer::AddLayer(Common::Singleton<Core::Devtools::Layer>::Instance());
     ImGui::Friends::Register();
@@ -509,6 +526,7 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
     });
     Diag::SetHostCacheProbe([this] { return texture_cache.GetDiagUsage(); });
     Diag::SetGpuRefreshProbe([this] { draw_scheduler.GetWorkSemaphore()->Refresh(); });
+    LOG_INFO(Render_Vulkan, "Presenter constructor finished successfully.");
 }
 
 Presenter::~Presenter() {
@@ -753,8 +771,16 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
                     vk::PipelineStageFlagBits2::eFragmentShader, vk::AccessFlagBits2::eShaderRead);
     runtime.FlushBarriers();
 
-    image_view = fsr_pass.Render(cmdbuf, image_view, image_size, {frame->width, frame->height},
-                                 fsr_settings, frame->is_hdr);
+    if (dlss_settings.enable && dlss_pass.IsAvailable()) {
+        image_view = dlss_pass.Render(cmdbuf, image.GetImage(), image_view, view_info.format,
+                                      image_size, {frame->width, frame->height},
+                                      vk::Image{}, vk::ImageView{}, vk::Format::eUndefined,
+                                      vk::Image{}, vk::ImageView{}, vk::Format::eUndefined,
+                                      0.0f, 0.0f, dlss_settings, frame->is_hdr);
+    } else {
+        image_view = fsr_pass.Render(cmdbuf, image_view, image_size, {frame->width, frame->height},
+                                     fsr_settings, frame->is_hdr);
+    }
 
     // Vulkan has no sRGB variant of the 10-bit format, so an A2R10G10B10Srgb buffer reaches
     // the post process pass still sRGB encoded and has to be decoded there instead.
@@ -1156,6 +1182,12 @@ Frame* Presenter::GetRenderFrame() {
 }
 
 void Presenter::SetExpectedGameSize(s32 width, s32 height) {
+    if (EmulatorSettings.IsStretchToFill()) {
+        expected_frame_height = height;
+        expected_frame_width = width;
+        return;
+    }
+
     const float ratio = (float)width / (float)height;
 
     expected_frame_height = height;

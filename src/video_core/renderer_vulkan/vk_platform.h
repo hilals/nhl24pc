@@ -20,6 +20,7 @@ namespace Vulkan {
 
 constexpr u32 TargetVulkanApiVersion = VK_API_VERSION_1_3;
 
+
 vk::SurfaceKHR CreateSurface(vk::Instance instance, const Frontend::WindowSDL& emu_window);
 
 vk::UniqueInstance CreateInstance(Frontend::WindowSystemType window_type, bool enable_validation,

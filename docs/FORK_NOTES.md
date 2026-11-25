@@ -28,6 +28,10 @@ cache fills again.
 
 Files: `vk_pipeline_cache.cpp/.h`, `vk_pipeline_serialization.cpp/.h`.
 
+Update (2026-11-24): hilals/nhl24pc fixed the same bug independently (per-permutation `own_info`,
+plus extra checks that skip cached pipelines whose stages don't line up). When syncing with
+hilals, their implementation replaced the one from this fork.
+
 ### Crash diagnostic layer ignored its settings
 
 The `output_path` and `sync_after_commands` layer settings were sent under the wrong layer name,

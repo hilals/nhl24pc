@@ -161,7 +161,14 @@ struct Info : InfoPersistent {
 
     void AddBindings(Backend::Bindings& bnd) const {
         bnd.buffer += buffers.size();
-        bnd.unified += buffers.size() + images.size() + samplers.size();
+        // nhlport: an image with the dynamic-index mip fallback takes one binding per mip (see
+        // DefineImagesAndSamplers / BuildDescSetLayout); counting it as one shifted every binding
+        // of the next stage when a cached permutation was reused.
+        u32 image_bindings = 0;
+        for (const auto& image : images) {
+            image_bindings += image.NumBindings(*this);
+        }
+        bnd.unified += buffers.size() + image_bindings + samplers.size();
     }
 
     void RefreshFlatBuf() {

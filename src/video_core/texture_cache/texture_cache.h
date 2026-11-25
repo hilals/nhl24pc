@@ -67,6 +67,14 @@ class TextureCache {
     using PageTable = Common::MultiLevelPageTable<Traits>;
 
 public:
+    /// nhlport debug: hash/dump/override an image that was never refreshed through the normal upload path.
+    void DebugHashAndDump(Image& image) {
+        ApplyTextureOverride(image);
+        DumpImageToDisk(image);
+        DebugDumpLayers(image);
+    }
+    void DebugDumpLayers(Image& image);
+
     enum class BindingType : u32 {
         Texture,
         Storage,
@@ -170,6 +178,9 @@ public:
                                                                ImageId merged_image_id);
 
     /// Resolves depth overlap and either re-creates the image or returns existing one
+    /// nhlport: recreate depth images sampled with a colour format (see texture_cache.cpp).
+    [[nodiscard]] bool DepthAsColorFix() const;
+
     [[nodiscard]] ImageId ResolveDepthOverlap(const ImageInfo& requested_info, BindingType binding,
                                               ImageId cache_img_id);
 
@@ -364,7 +375,9 @@ private:
 
     /// Copies image memory back to CPU.
     void DownloadImageMemory(ImageId image_id, bool sync = false);
+    void DumpImageToDisk(Image& image);
     void ApplyPortraitOverride(Image& image);
+    void ApplyTextureOverride(Image& image);
     void InstallPortrait(Image& image, u32 player_id);
     void RefreshPortraitOnBind(Image& image);
 

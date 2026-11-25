@@ -156,6 +156,8 @@ public:
     u64 lru_id{};
     u64 tick_accessed_last{};
     u64 hash{};
+    /// nhlport debug: content hash (XXH3 of downloaded mip0) when ApplyTextureOverride hashed it.
+    u64 content_hash{};
     /// nhlport: CPU write faults seen on this image; after a few the image is treated as a
     /// CPU-streamed texture: never re-protected, uploaded once per frame instead.
     u32 cpu_fault_count{};

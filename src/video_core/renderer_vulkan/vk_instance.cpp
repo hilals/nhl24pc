@@ -100,12 +100,12 @@ Instance::Instance(Frontend::WindowSDL& window, s32 physical_device_index,
     : instance{CreateInstance(window.GetWindowInfo().type, enable_validation,
                               enable_crash_diagnostic)},
       physical_devices{EnumeratePhysicalDevices(instance)} {
-    if (enable_validation) {
-        debug_callback = CreateDebugCallback(*instance);
-    }
+    debug_callback = CreateDebugCallback(*instance);
     const std::size_t num_physical_devices = static_cast<u16>(physical_devices.size());
     ASSERT_MSG(num_physical_devices > 0, "No physical devices found");
     LOG_INFO(Render_Vulkan, "Found {} physical devices", num_physical_devices);
+
+
 
     if (physical_device_index < 0) {
         std::vector<
@@ -230,7 +230,7 @@ bool Instance::CreateDevice() {
         return false;
     }
 
-    boost::container::static_vector<const char*, 32> enabled_extensions;
+    boost::container::static_vector<const char*, 64> enabled_extensions;
     const auto add_extension = [&](std::string_view extension) -> bool {
         const auto result =
             std::find_if(available_extensions.begin(), available_extensions.end(),
@@ -238,13 +238,22 @@ bool Instance::CreateDevice() {
 
         if (result != available_extensions.end()) {
             LOG_INFO(Render_Vulkan, "Enabling extension: {}", extension);
-            enabled_extensions.push_back(extension.data());
+            enabled_extensions.push_back(result->c_str());
             return true;
         }
 
         LOG_WARNING(Render_Vulkan, "Extension {} unavailable.", extension);
         return false;
     };
+
+    // NVIDIA NGX (DLSS) extensions
+    static constexpr std::array ngx_extensions = {
+        "VK_NVX_binary_import",
+        "VK_NVX_image_view_handle",
+    };
+    for (const auto* ext : ngx_extensions) {
+        add_extension(ext);
+    }
 
     // Required
     ASSERT_MSG(add_extension(VK_KHR_SWAPCHAIN_EXTENSION_NAME),
@@ -391,6 +400,7 @@ bool Instance::CreateDevice() {
     const auto vk11_features = feature_chain.get<vk::PhysicalDeviceVulkan11Features>();
     vk12_features = feature_chain.get<vk::PhysicalDeviceVulkan12Features>();
     vk13_features = feature_chain.get<vk::PhysicalDeviceVulkan13Features>();
+
     vk::StructureChain device_chain = {
         vk::DeviceCreateInfo{
             .queueCreateInfoCount = 1u,
@@ -432,6 +442,7 @@ bool Instance::CreateDevice() {
         },
         vk::PhysicalDeviceVulkan11Features{
             .storageBuffer16BitAccess = vk11_features.storageBuffer16BitAccess,
+            .uniformAndStorageBuffer16BitAccess = vk11_features.uniformAndStorageBuffer16BitAccess,
             .shaderDrawParameters = vk11_features.shaderDrawParameters,
         },
         vk::PhysicalDeviceVulkan12Features{
@@ -583,6 +594,7 @@ bool Instance::CreateDevice() {
     if (!shader_clock) {
         device_chain.unlink<vk::PhysicalDeviceShaderClockFeaturesKHR>();
     }
+
 
     auto [device_result, dev] = physical_device.createDeviceUnique(device_chain.get());
     if (device_result != vk::Result::eSuccess) {

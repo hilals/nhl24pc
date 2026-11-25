@@ -1,4 +1,4 @@
-﻿// SPDX-FileCopyrightText: Copyright 2025-2026 shadPS4 Emulator Project
+// SPDX-FileCopyrightText: Copyright 2025-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
@@ -428,6 +428,10 @@ struct GPUSettings {
     Setting<std::string> present_mode{"Mailbox"};
     Setting<bool> hdr_allowed{false};
     Setting<bool> fsr_enabled{false};
+    Setting<bool> dlss_enabled{false};
+    Setting<int> dlss_quality{1};
+    Setting<int> dlss_sharpness{300};
+    Setting<bool> stretch_to_fill{false};
     Setting<bool> rcas_enabled{true};
     Setting<int> rcas_attenuation{250};
     Setting<bool> userfaultfd{false};
@@ -444,6 +448,10 @@ struct GPUSettings {
             make_override<GPUSettings>("window_width", &GPUSettings::window_width),
             make_override<GPUSettings>("hdr_allowed", &GPUSettings::hdr_allowed),
             make_override<GPUSettings>("fsr_enabled", &GPUSettings::fsr_enabled),
+            make_override<GPUSettings>("dlss_enabled", &GPUSettings::dlss_enabled),
+            make_override<GPUSettings>("dlss_quality", &GPUSettings::dlss_quality),
+            make_override<GPUSettings>("dlss_sharpness", &GPUSettings::dlss_sharpness),
+            make_override<GPUSettings>("stretch_to_fill", &GPUSettings::stretch_to_fill),
             make_override<GPUSettings>("rcas_enabled", &GPUSettings::rcas_enabled),
             make_override<GPUSettings>("rcas_attenuation", &GPUSettings::rcas_attenuation),
             make_override<GPUSettings>("dump_shaders", &GPUSettings::dump_shaders),
@@ -464,7 +472,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(GPUSettings, window_width, window_height, int
                                    readbacks_mode, readback_linear_images_enabled,
                                    direct_memory_access_enabled, dump_shaders, patch_shaders,
                                    vblank_frequency, full_screen, full_screen_mode, present_mode,
-                                   hdr_allowed, fsr_enabled, rcas_enabled, rcas_attenuation,
+                                   hdr_allowed, fsr_enabled, dlss_enabled, dlss_quality, dlss_sharpness, stretch_to_fill, rcas_enabled, rcas_attenuation,
                                    userfaultfd, inline_fetch_shader)
 
 // -------------------------------
@@ -738,6 +746,10 @@ public:
     SETTING_FORWARD(m_gpu, InternalScreenWidth, internal_screen_width)
     SETTING_FORWARD_BOOL(m_gpu, HdrAllowed, hdr_allowed)
     SETTING_FORWARD_BOOL(m_gpu, FsrEnabled, fsr_enabled)
+    SETTING_FORWARD_BOOL(m_gpu, DlssEnabled, dlss_enabled)
+    SETTING_FORWARD(m_gpu, DlssQuality, dlss_quality)
+    SETTING_FORWARD(m_gpu, DlssSharpness, dlss_sharpness)
+    SETTING_FORWARD_BOOL(m_gpu, StretchToFill, stretch_to_fill)
     SETTING_FORWARD_BOOL(m_gpu, RcasEnabled, rcas_enabled)
     SETTING_FORWARD(m_gpu, RcasAttenuation, rcas_attenuation)
     SETTING_FORWARD(m_gpu, ReadbacksMode, readbacks_mode)

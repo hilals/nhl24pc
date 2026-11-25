@@ -1214,6 +1214,8 @@ set(VIDEO_CORE src/video_core/amdgpu/cb_db_extent.h
                src/video_core/renderer_vulkan/vk_swapchain.h
                src/video_core/renderer_vulkan/host_passes/fsr_pass.cpp
                src/video_core/renderer_vulkan/host_passes/fsr_pass.h
+               src/video_core/renderer_vulkan/host_passes/dlss_pass.cpp
+               src/video_core/renderer_vulkan/host_passes/dlss_pass.h
                src/video_core/renderer_vulkan/host_passes/pp_pass.cpp
                src/video_core/renderer_vulkan/host_passes/pp_pass.h
                src/video_core/texture_cache/blit_helper.cpp
@@ -1353,6 +1355,7 @@ target_link_libraries(shadps4 PRIVATE libprotobuf)
 target_link_libraries(shadps4 PRIVATE ZArchive::zarchive)
 target_link_libraries(shadps4 PRIVATE zstd::libzstd)
 target_include_directories(shadps4 PRIVATE "${SHADNET_PROTO_OUT}")
+target_include_directories(shadps4 PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/dlss_bridge")
 
 if (${CMAKE_SYSTEM_NAME} STREQUAL "FreeBSD")
     target_link_libraries(shadps4 PRIVATE "/usr/lib/libusb.so")
@@ -1518,6 +1521,11 @@ target_include_directories(shadps4 PRIVATE ${IMGUI_RESOURCES_INCLUDE})
 # Discord RPC
 if (ENABLE_DISCORD_RPC)
     target_link_libraries(shadps4 PRIVATE discord-rpc)
+endif()
+
+# DLSS bridge (NVIDIA DLSS Super Resolution / DLAA via bbport_dlss.dll)
+if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/dlss_bridge/CMakeLists.txt")
+    add_subdirectory(dlss_bridge)
 endif()
 
 # Install rules

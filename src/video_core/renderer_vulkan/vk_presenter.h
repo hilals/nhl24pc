@@ -8,6 +8,7 @@
 #include "core/libraries/videoout/buffer.h"
 #include "imgui/imgui_texture.h"
 #include "video_core/renderer_vulkan/host_passes/fsr_pass.h"
+#include "video_core/renderer_vulkan/host_passes/dlss_pass.h"
 #include "video_core/renderer_vulkan/host_passes/pp_pass.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
@@ -55,6 +56,10 @@ public:
 
     HostPasses::PostProcessingPass::Settings& GetPPSettingsRef() {
         return pp_settings;
+    }
+
+    HostPasses::DlssPass::Settings& GetDlssSettingsRef() {
+        return dlss_settings;
     }
 
     HostPasses::FsrPass::Settings& GetFsrSettingsRef() {
@@ -117,6 +122,8 @@ private:
     Instance instance;
     HostPasses::FsrPass fsr_pass;
     HostPasses::FsrPass::Settings fsr_settings{};
+    HostPasses::DlssPass dlss_pass;
+    HostPasses::DlssPass::Settings dlss_settings{};
     HostPasses::PostProcessingPass::Settings pp_settings{};
     HostPasses::PostProcessingPass pp_pass;
     AmdGpu::Liverpool* liverpool;

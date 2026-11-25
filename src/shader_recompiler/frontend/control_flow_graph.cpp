@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <array>
 #include <string>
 #include "common/assert.h"
 #include "common/logging/log.h"
@@ -124,12 +125,17 @@ struct TableEntry {
 // followed by [s_waitcnt] v_mov_b32 vN, <src> [s_branch exit] entries. Shader compilers emit this
 // to read a VGPR selected by a runtime index. It is a dynamic jump the recompiler cannot resolve,
 // so it becomes a chain of "if (index == k) vN = src" checks.
+static bool JtFail(int line) {
+    LOG_INFO(Render_Recompiler, "jump table expansion gave up at control_flow_graph.cpp:{}", line);
+    return false;
+}
+
 bool AnalyzeJumpTable(std::span<const u32> code, std::span<const GcnInst> insts,
                       const std::vector<u32>& pcs, u32 i, std::vector<Replacement>& repl) {
     const u32 count = static_cast<u32>(insts.size());
     const u32 total = pcs[count];
     if (i < 3) {
-        return false;
+        return JtFail(__LINE__);
     }
     const GcnInst& getpc = insts[i - 3];
     const GcnInst& add = insts[i - 2];
@@ -137,11 +143,11 @@ bool AnalyzeJumpTable(std::span<const u32> code, std::span<const GcnInst> insts,
     const GcnInst& setpc = insts[i];
     if (getpc.opcode != Opcode::S_GETPC_B64 || add.opcode != Opcode::S_ADD_U32 ||
         addc.opcode != Opcode::S_ADDC_U32 || add.src_count < 2) {
-        return false;
+        return JtFail(__LINE__);
     }
     const u32 reg = getpc.dst[0].code;
     if (setpc.src[0].code != reg || add.dst[0].code != reg || addc.dst[0].code != reg + 1) {
-        return false;
+        return JtFail(__LINE__);
     }
     const InstOperand* offset_op = nullptr;
     if (add.src[0].field == OperandField::ScalarGPR && add.src[0].code == reg) {
@@ -150,7 +156,7 @@ bool AnalyzeJumpTable(std::span<const u32> code, std::span<const GcnInst> insts,
         offset_op = &add.src[0];
     }
     if (!offset_op || offset_op->field != OperandField::ScalarGPR || offset_op->code > 103) {
-        return false;
+        return JtFail(__LINE__);
     }
     const u32 offset_reg = offset_op->code;
 
@@ -166,14 +172,14 @@ bool AnalyzeJumpTable(std::span<const u32> code, std::span<const GcnInst> insts,
             k++;
         }
         if (k >= count || insts[k].opcode != Opcode::V_MOV_B32 || insts[k].length % 4 != 0) {
-            return false;
+            return JtFail(__LINE__);
         }
         entries.push_back({entry_pc - base_pc, pcs[k] / 4, insts[k].length / 4});
         k++;
         if (k < count && insts[k].opcode == Opcode::S_BRANCH) {
             const u32 target = insts[k].BranchTarget(pcs[k]);
             if (exit_pc != 0 && target != exit_pc) {
-                return false;
+                return JtFail(__LINE__);
             }
             exit_pc = target;
             j = k + 1;
@@ -181,16 +187,16 @@ bool AnalyzeJumpTable(std::span<const u32> code, std::span<const GcnInst> insts,
         }
         // No branch: last entry falls through to the exit.
         if (exit_pc != 0 && pcs[k] != exit_pc) {
-            return false;
+            return JtFail(__LINE__);
         }
         exit_pc = pcs[k];
         break;
     }
     if (entries.size() < 2 || exit_pc <= pcs[i] || exit_pc > total) {
-        return false;
+        return JtFail(__LINE__);
     }
     if (!std::ranges::binary_search(pcs, exit_pc)) {
-        return false;
+        return JtFail(__LINE__);
     }
     const u32 region_begin = pcs[i - 3];
     const u32 region_end = exit_pc;
@@ -228,7 +234,7 @@ bool AnalyzeJumpTable(std::span<const u32> code, std::span<const GcnInst> insts,
              (a1.src[1].field == OperandField::ScalarGPR && a1.src[1].code == sbase &&
               a1.src[0].field == OperandField::LiteralConst));
         if (!shape_ok) {
-            return false;
+            return JtFail(__LINE__);
         }
         const u32 table_literal = a1.src[0].field == OperandField::LiteralConst ? a1.src[0].code
                                                                                  : a1.src[1].code;
@@ -243,17 +249,78 @@ bool AnalyzeJumpTable(std::span<const u32> code, std::span<const GcnInst> insts,
                     c *= 2;
                 }
                 if (c == offset_reg || c == offset_reg + 1 || c == sbase || c == sbase + 1) {
-                    return false;
+                    return JtFail(__LINE__);
                 }
             }
         }
-        // The index register must still hold the same value at the jump.
+        // The index register must still hold the same value at the jump. When the shader reuses it
+        // in between (e.g. an s_buffer_load into s[64:67]), the value is saved in a spare SGPR at
+        // the place where the table load is removed.
+        bool idx_clobbered = false;
         for (u32 n = ld + 1; n < i - 3; n++) {
             for (u32 d = 0; d < insts[n].dst_count; d++) {
-                if (insts[n].dst[d].field == OperandField::ScalarGPR &&
-                    (insts[n].dst[d].code == idx_reg || insts[n].dst[d].code + 1 == idx_reg)) {
-                    return false;
+                if (insts[n].dst[d].field != OperandField::ScalarGPR) {
+                    continue;
                 }
+                u32 width = insts[n].dst[d].type == ScalarType::Uint64 ? 2 : 1;
+                if (insts[n].encoding == InstEncoding::SMRD) {
+                    width = std::max<u32>(1, insts[n].control.smrd.count);
+                }
+                if (idx_reg >= insts[n].dst[d].code && idx_reg < insts[n].dst[d].code + width) {
+                    idx_clobbered = true;
+                }
+            }
+        }
+        u32 spare_reg = 0;
+        if (idx_clobbered) {
+            // Highest SGPR that no instruction in the shader touches (operands counted with a
+            // generous width so wide scalar loads cannot hide a use).
+            std::array<bool, 104> used{};
+            for (u32 n = 0; n < count; n++) {
+                for (u32 sidx = 0; sidx < insts[n].src_count && sidx < 4; sidx++) {
+                    if (insts[n].src[sidx].field != OperandField::ScalarGPR) {
+                        continue;
+                    }
+                    u32 c = insts[n].src[sidx].code;
+                    const auto enc = insts[n].encoding;
+                    u32 width = 2; // 64-bit operands
+                    if (enc == InstEncoding::SMRD && sidx == 0) {
+                        c *= 2;
+                        width = 4; // s_buffer_load resource
+                    } else if (enc == InstEncoding::MIMG || enc == InstEncoding::MUBUF ||
+                               enc == InstEncoding::MTBUF) {
+                        // Resource/sampler descriptors are 4-8 registers; the code may be stored
+                        // either as a register number or as a multiple of 4.
+                        width = 8;
+                        for (u32 w = 0; w < 8 && c * 4 + w < used.size(); w++) {
+                            used[c * 4 + w] = true;
+                        }
+                    }
+                    for (u32 w = 0; w < width && c + w < used.size(); w++) {
+                        used[c + w] = true;
+                    }
+                }
+                for (u32 d = 0; d < insts[n].dst_count && d < 2; d++) {
+                    if (insts[n].dst[d].field != OperandField::ScalarGPR) {
+                        continue;
+                    }
+                    u32 width = insts[n].dst[d].type == ScalarType::Uint64 ? 2 : 1;
+                    if (insts[n].encoding == InstEncoding::SMRD) {
+                        width = std::max<u32>(1, insts[n].control.smrd.count);
+                    }
+                    for (u32 w = 0; w < width && insts[n].dst[d].code + w < used.size(); w++) {
+                        used[insts[n].dst[d].code + w] = true;
+                    }
+                }
+            }
+            for (u32 r = 103; r > 16; r--) {
+                if (!used[r]) {
+                    spare_reg = r;
+                    break;
+                }
+            }
+            if (spare_reg == 0) {
+                return JtFail(__LINE__);
             }
         }
         // The index may be biased (s_add_u32 sIDX, sIDX, imm) to select a table that starts
@@ -280,7 +347,7 @@ bool AnalyzeJumpTable(std::span<const u32> code, std::span<const GcnInst> insts,
                     imm = &lhs;
                 }
                 if (!imm) {
-                    return false;
+                    return JtFail(__LINE__);
                 }
                 if (imm->field == OperandField::LiteralConst) {
                     bias = imm->code;
@@ -289,7 +356,7 @@ bool AnalyzeJumpTable(std::span<const u32> code, std::span<const GcnInst> insts,
                 } else if (imm->field == OperandField::ConstZero) {
                     bias = 0;
                 } else {
-                    return false;
+                    return JtFail(__LINE__);
                 }
             }
             break;
@@ -318,12 +385,18 @@ bool AnalyzeJumpTable(std::span<const u32> code, std::span<const GcnInst> insts,
                 std::ranges::find_if(entries, [&](const TableEntry& e) { return e.offset == lo; });
             selectors.emplace_back(bias + k * 8, static_cast<u32>(it - entries.begin()));
         }
-        LOG_DEBUG(Render_Recompiler, "Jump table data at {:#x}:{}", table_pc, dump);
+        LOG_DEBUG(Render_Recompiler, "Jump table data at {:#x} (shader size {:#x}, bias {:#x}):{}", table_pc, total, bias, dump);
         if (selectors.empty()) {
-            return false;
+            return JtFail(__LINE__);
         }
         compare_reg = idx_reg;
         load_removal = {pcs[ld - 3], pcs[ld] + insts[ld].length, {}};
+        if (idx_clobbered) {
+            // s_mov_b32 spare, idx
+            constexpr u32 SOP1_MOV_B32 = 0xBE800300;
+            load_removal.words.push_back(SOP1_MOV_B32 | (spare_reg << 16) | idx_reg);
+            compare_reg = spare_reg;
+        }
         has_load_removal = true;
         for (u32 r : {sbase, sbase + 1, offset_reg, offset_reg + 1}) {
             killed_regs.push_back(r);
@@ -334,7 +407,29 @@ bool AnalyzeJumpTable(std::span<const u32> code, std::span<const GcnInst> insts,
         }
     }
     if (compare_reg > 103) {
-        return false;
+        return JtFail(__LINE__);
+    }
+
+    // A register that the shader redefines between the removed table load and the jump no longer
+    // carries the removed value, so later reads of it are fine.
+    if (has_load_removal && ld != 0) {
+        std::erase_if(killed_regs, [&](u32 r) {
+            for (u32 n = ld + 1; n < i - 3; n++) {
+                for (u32 d = 0; d < 2; d++) {
+                    if (insts[n].dst[d].field != OperandField::ScalarGPR) {
+                        continue;
+                    }
+                    u32 width = insts[n].dst[d].type == ScalarType::Uint64 ? 2 : 1;
+                    if (insts[n].encoding == InstEncoding::SMRD) {
+                        width = std::max<u32>(1, insts[n].control.smrd.count);
+                    }
+                    if (r >= insts[n].dst[d].code && r < insts[n].dst[d].code + width) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        });
     }
 
     // Registers whose definition is going away must not be read afterwards.
@@ -361,7 +456,7 @@ bool AnalyzeJumpTable(std::span<const u32> code, std::span<const GcnInst> insts,
                 }
             }
             if (reads) {
-                return false;
+                return JtFail(__LINE__);
             }
             bool writes = false;
             for (u32 d = 0; d < 2; d++) {
@@ -421,7 +516,7 @@ bool ExpandIndirectRegisterTables(std::span<const u32> code, std::span<const Gcn
     }
     pcs[count] = total;
     if (total != code.size() * sizeof(u32)) {
-        return false;
+        return JtFail(__LINE__);
     }
 
     std::vector<Replacement> repl;
@@ -429,7 +524,7 @@ bool ExpandIndirectRegisterTables(std::span<const u32> code, std::span<const Gcn
     for (u32 i = 3; i < count; i++) {
         if (insts[i].opcode == Opcode::S_SETPC_B64 && !ResolveSetPcTarget(insts, i, pcs)) {
             if (!AnalyzeJumpTable(code, insts, pcs, i, repl)) {
-                return false;
+                return JtFail(__LINE__);
             }
             tables++;
         }
@@ -440,7 +535,7 @@ bool ExpandIndirectRegisterTables(std::span<const u32> code, std::span<const Gcn
     std::ranges::sort(repl, {}, &Replacement::begin);
     for (size_t n = 1; n < repl.size(); n++) {
         if (repl[n - 1].end > repl[n].begin) {
-            return false;
+            return JtFail(__LINE__);
         }
     }
 
@@ -474,7 +569,7 @@ bool ExpandIndirectRegisterTables(std::span<const u32> code, std::span<const Gcn
         if (inst.IsFork() || inst.opcode == Opcode::S_SWAPPC_B64) {
             // Not safe to move.
             if (pc >= first_begin) {
-                return false;
+                return JtFail(__LINE__);
             }
             continue;
         }
@@ -484,7 +579,7 @@ bool ExpandIndirectRegisterTables(std::span<const u32> code, std::span<const Gcn
         const u32 target = inst.BranchTarget(pc);
         const s64 simm = (static_cast<s64>(map_pc(target)) - static_cast<s64>(map_pc(pc)) - 4) / 4;
         if (simm < INT16_MIN || simm > INT16_MAX) {
-            return false;
+            return JtFail(__LINE__);
         }
         fixups.emplace_back(map_pc(pc) / 4, static_cast<u16>(static_cast<s16>(simm)));
     }
@@ -499,7 +594,7 @@ bool ExpandIndirectRegisterTables(std::span<const u32> code, std::span<const Gcn
         }
         const auto target = ResolveSetPcTarget(insts, n, pcs);
         if (!target) {
-            return false;
+            return JtFail(__LINE__);
         }
         const GcnInst& arith = insts[n - 2];
         const u32 base_pc = pcs[n - 3] + insts[n - 3].length;
@@ -510,7 +605,7 @@ bool ExpandIndirectRegisterTables(std::span<const u32> code, std::span<const Gcn
         literal_fixups.emplace_back(map_pc(pcs[n - 2]) / 4 + 1, literal);
     }
     if (bad_target) {
-        return false; // something jumps into the middle of a rewritten range
+        return JtFail(__LINE__); // something jumps into the middle of a rewritten range
     }
 
     out.clear();

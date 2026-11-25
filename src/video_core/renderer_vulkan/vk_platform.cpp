@@ -36,23 +36,12 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL DebugUtilsCallback(
     vk::DebugUtilsMessageSeverityFlagBitsEXT severity, vk::DebugUtilsMessageTypeFlagsEXT type,
     const vk::DebugUtilsMessengerCallbackDataEXT* callback_data, void* user_data) {
 
-    Common::Log::Level level{};
-    switch (severity) {
-    case vk::DebugUtilsMessageSeverityFlagBitsEXT::eError:
+    Common::Log::Level level = Common::Log::Level::Info;
+    if (severity == vk::DebugUtilsMessageSeverityFlagBitsEXT::eError) {
         level = Common::Log::Level::Error;
-        break;
-    case vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning:
-        level = Common::Log::Level::Info;
-        break;
-    case vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo:
-    case vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose:
-        level = Common::Log::Level::Debug;
-        break;
-    default:
-        level = Common::Log::Level::Info;
     }
 
-    LOG_GENERIC(Render_Vulkan, level, "{}: {}",
+    LOG_GENERIC(Render_Vulkan, level, "[Vulkan Debug] {}: {}",
                 callback_data->pMessageIdName ? callback_data->pMessageIdName : "<null>",
                 callback_data->pMessage ? callback_data->pMessage : "<null>");
 
@@ -166,7 +155,11 @@ std::vector<const char*> GetInstanceExtensions(Frontend::WindowSystemType window
 
     // Add the windowing system specific extension
     std::vector<const char*> extensions;
-    extensions.reserve(7);
+    extensions.reserve(16);
+
+    if (window_type != Frontend::WindowSystemType::Headless) {
+        extensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
+    }
 
     switch (window_type) {
     case Frontend::WindowSystemType::Headless:
@@ -192,13 +185,12 @@ std::vector<const char*> GetInstanceExtensions(Frontend::WindowSystemType window
         break;
     }
 
-    if (window_type != Frontend::WindowSystemType::Headless) {
-        extensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
-    }
-
     if (EmulatorSettings.IsHdrAllowed()) {
         extensions.push_back(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);
     }
+
+    // Required by NVIDIA NGX (DLSS)
+    extensions.push_back(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
 
     if (enable_debug_utils) {
         extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
@@ -293,7 +285,7 @@ vk::UniqueInstance CreateInstance(Frontend::WindowSystemType window_type, bool e
         .applicationVersion = VK_MAKE_VERSION(1, 0, 0),
         .pEngineName = "shadPS4 Vulkan",
         .engineVersion = VK_MAKE_VERSION(1, 0, 0),
-        .apiVersion = available_version,
+        .apiVersion = TargetVulkanApiVersion,
     };
 
     const std::string extensions_string = fmt::format("{}", fmt::join(extensions, ", "));
@@ -399,21 +391,28 @@ vk::UniqueInstance CreateInstance(Frontend::WindowSystemType window_type, bool e
         },
     };
 
-    vk::StructureChain<vk::InstanceCreateInfo, vk::LayerSettingsCreateInfoEXT> instance_ci_chain = {
-        vk::InstanceCreateInfo{
-            .pApplicationInfo = &application_info,
-            .enabledLayerCount = static_cast<u32>(layers.size()),
-            .ppEnabledLayerNames = layers.data(),
-            .enabledExtensionCount = static_cast<u32>(extensions.size()),
-            .ppEnabledExtensionNames = extensions.data(),
-        },
-        vk::LayerSettingsCreateInfoEXT{
-            .settingCount = layer_setings.size(),
-            .pSettings = layer_setings.data(),
-        },
+    vk::LayerSettingsCreateInfoEXT layer_settings_ci{
+        .settingCount = static_cast<u32>(layer_setings.size()),
+        .pSettings = layer_setings.data(),
     };
 
-    auto [instance_result, instance] = vk::createInstanceUnique(instance_ci_chain.get());
+    const char* inst_exts[] = {
+        "VK_KHR_surface",
+        "VK_KHR_win32_surface",
+        "VK_KHR_get_physical_device_properties2",
+        "VK_EXT_debug_utils",
+    };
+
+    vk::InstanceCreateInfo instance_ci{
+        .pNext = layers.empty() ? nullptr : &layer_settings_ci,
+        .pApplicationInfo = &application_info,
+        .enabledLayerCount = static_cast<u32>(layers.size()),
+        .ppEnabledLayerNames = layers.empty() ? nullptr : layers.data(),
+        .enabledExtensionCount = 4,
+        .ppEnabledExtensionNames = inst_exts,
+    };
+
+    auto [instance_result, instance] = vk::createInstanceUnique(instance_ci);
     ASSERT_MSG(instance_result == vk::Result::eSuccess, "Failed to create instance: {}",
                vk::to_string(instance_result));
 

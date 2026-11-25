@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <cstring>
+#include <vector>
 #include <codecvt>
 #include <fstream>
 #include <sstream>
@@ -14,6 +16,20 @@
 #include "core/emulator_state.h"
 #include "core/file_format/psf.h"
 #include "memory_patcher.h"
+#include "common/types.h"
+#include "core/memory.h"
+#include <thread>
+#include <atomic>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace MemoryPatcher {
 
@@ -220,6 +236,319 @@ void ApplyPatchesFromXML(std::filesystem::path path) {
     }
 }
 
+typedef void (PS4_SYSV_ABI *UIInsertFn)(void* map, const char* key, const char* val);
+static UIInsertFn s_orig_ui_insert = nullptr;
+
+static inline bool StrEqualsIgnoreCase(const char* a, const char* b) {
+    if (a == b) return true;
+    if (!a || !b) return false;
+    while (*a && *b) {
+        char ca = (*a >= 'A' && *a <= 'Z') ? static_cast<char>(*a + ('a' - 'A')) : *a;
+        char cb = (*b >= 'A' && *b <= 'Z') ? static_cast<char>(*b + ('a' - 'A')) : *b;
+        if (ca != cb) return false;
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+static thread_local void* s_current_team_map = nullptr;
+static thread_local bool s_current_team_is_utah = false;
+
+static void PS4_SYSV_ABI Hook_UIInsert(void* map, const char* key, const char* val) {
+    if (key != nullptr && reinterpret_cast<uintptr_t>(key) >= 0x10000) {
+        if (map != s_current_team_map) {
+            s_current_team_map = map;
+            s_current_team_is_utah = false;
+        }
+
+        // If val indicates Arizona or Utah Mammoth, mark this map dictionary as Utah
+        if (val != nullptr && reinterpret_cast<uintptr_t>(val) >= 0x10000) {
+            if (StrEqualsIgnoreCase(val, "Arizona") || StrEqualsIgnoreCase(val, "Utah") ||
+                StrEqualsIgnoreCase(val, "Coyotes") || StrEqualsIgnoreCase(val, "Mammoth") ||
+                StrEqualsIgnoreCase(val, "Arizona Coyotes") || StrEqualsIgnoreCase(val, "Utah Mammoth") ||
+                StrEqualsIgnoreCase(val, "ARZ") || StrEqualsIgnoreCase(val, "ARI") ||
+                StrEqualsIgnoreCase(val, "PHX") || StrEqualsIgnoreCase(val, "UTA")) {
+                s_current_team_is_utah = true;
+            }
+        }
+
+        const char* orig_val = val;
+        const bool allow_empty = s_current_team_is_utah && (!val || val[0] == '\0');
+
+        if (StrEqualsIgnoreCase(key, "TeamCity") || StrEqualsIgnoreCase(key, "CityName") ||
+            StrEqualsIgnoreCase(key, "CategoryName") || StrEqualsIgnoreCase(key, "FranchiseCategory") ||
+            StrEqualsIgnoreCase(key, "City") || StrEqualsIgnoreCase(key, "TeamCityName") ||
+            StrEqualsIgnoreCase(key, "TeamNameLine1") || StrEqualsIgnoreCase(key, "UserTeamNameLine1") ||
+            StrEqualsIgnoreCase(key, "FranchiseTeamNameLine1") || StrEqualsIgnoreCase(key, "OpponentTeamNameLine1") ||
+            StrEqualsIgnoreCase(key, "NameLine1") || StrEqualsIgnoreCase(key, "Line1Name") ||
+            StrEqualsIgnoreCase(key, "Team_Line1Name") || StrEqualsIgnoreCase(key, "Line1")) {
+            if (allow_empty || (val && StrEqualsIgnoreCase(val, "Arizona"))) {
+                val = "Utah";
+                s_current_team_is_utah = true;
+            }
+        } else if (StrEqualsIgnoreCase(key, "TeamFullName") || StrEqualsIgnoreCase(key, "FullName")) {
+            if (allow_empty || (val && StrEqualsIgnoreCase(val, "Arizona Coyotes"))) {
+                val = "Utah Mammoth";
+                s_current_team_is_utah = true;
+            }
+        } else if (StrEqualsIgnoreCase(key, "TeamName") || StrEqualsIgnoreCase(key, "TeamNameLine2") ||
+                   StrEqualsIgnoreCase(key, "UserTeamNameLine2") || StrEqualsIgnoreCase(key, "FranchiseTeamNameLine2") ||
+                   StrEqualsIgnoreCase(key, "OpponentTeamNameLine2") || StrEqualsIgnoreCase(key, "NameLine2") ||
+                   StrEqualsIgnoreCase(key, "Line2Name") || StrEqualsIgnoreCase(key, "Team_Line2Name") ||
+                   StrEqualsIgnoreCase(key, "teamLine2Name") || StrEqualsIgnoreCase(key, "Line2") ||
+                   StrEqualsIgnoreCase(key, "TeamNickname") || StrEqualsIgnoreCase(key, "NickName") ||
+                   StrEqualsIgnoreCase(key, "Nickname")) {
+            if (allow_empty || (val && StrEqualsIgnoreCase(val, "Coyotes"))) {
+                val = "Mammoth";
+                s_current_team_is_utah = true;
+            }
+        } else if (StrEqualsIgnoreCase(key, "TeamAbbrName") || StrEqualsIgnoreCase(key, "AbbrName") ||
+                   StrEqualsIgnoreCase(key, "TeamAbbreviation") || StrEqualsIgnoreCase(key, "TeamAbbr") ||
+                   StrEqualsIgnoreCase(key, "Abbreviation")) {
+            if (allow_empty || (val && (StrEqualsIgnoreCase(val, "PHX") ||
+                StrEqualsIgnoreCase(val, "ARZ") || StrEqualsIgnoreCase(val, "ARI")))) {
+                val = "UTA";
+                s_current_team_is_utah = true;
+            }
+        } else if (StrEqualsIgnoreCase(key, "TileName")) {
+            if (StrEqualsIgnoreCase(val, "Arizona")) {
+                val = "Utah";
+                s_current_team_is_utah = true;
+            }
+        } else if (StrEqualsIgnoreCase(key, "ArenaName") || StrEqualsIgnoreCase(key, "StadiumName") ||
+                   StrEqualsIgnoreCase(key, "VenueName") || StrEqualsIgnoreCase(key, "Arena") ||
+                   StrEqualsIgnoreCase(key, "Stadium") || StrEqualsIgnoreCase(key, "Venue")) {
+            if (allow_empty || (val && StrEqualsIgnoreCase(val, "Arizona Arena"))) {
+                val = "Delta Center";
+            }
+        } else if (StrEqualsIgnoreCase(key, "ArenaCity") || StrEqualsIgnoreCase(key, "StadiumCity") ||
+                   StrEqualsIgnoreCase(key, "VenueCity") || StrEqualsIgnoreCase(key, "ArenaLocation") ||
+                   StrEqualsIgnoreCase(key, "StadiumLocation")) {
+            if (allow_empty || (val && (StrEqualsIgnoreCase(val, "Tempe, AZ") || StrEqualsIgnoreCase(val, "Tempe")))) {
+                val = "Delta Center, UT";
+            }
+        }
+
+        if (val != nullptr && reinterpret_cast<uintptr_t>(val) >= 0x10000) {
+            if (StrEqualsIgnoreCase(val, "Arizona Arena")) {
+                val = "Delta Center";
+            } else if (StrEqualsIgnoreCase(val, "Tempe, AZ")) {
+                val = "Delta Center, UT";
+            } else if (StrEqualsIgnoreCase(val, "ARIZONA ARENA TEMPE, AZ") ||
+                       StrEqualsIgnoreCase(val, "ARIZONA ARENA  TEMPE, AZ") ||
+                       StrEqualsIgnoreCase(val, "Arizona Arena, Tempe, AZ")) {
+                val = "DELTA CENTER, UT";
+            }
+        }
+        if (val != orig_val) {
+            LOG_INFO(Loader, "UIInsert override: key='{}', val='{}' -> '{}'",
+                     key, orig_val ? orig_val : "<null>", val);
+        }
+    }
+    s_orig_ui_insert(map, key, val);
+}
+
+static void InstallUtahBrandingHook() {
+#ifdef _WIN32
+    if (g_game_serial != "CUSA37933" && !g_game_serial.empty()) {
+        return;
+    }
+    if (g_eboot_address == 0) {
+        return;
+    }
+
+    uintptr_t target = g_eboot_address + 0x256cab0;
+    static const uint8_t expected_prologue[17] = {
+        0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56,
+        0x41, 0x55, 0x41, 0x54, 0x53, 0x48, 0x83, 0xec, 0x28
+    };
+
+    if (std::memcmp(reinterpret_cast<const void*>(target), expected_prologue, sizeof(expected_prologue)) != 0) {
+        LOG_WARNING(Loader, "Utah branding hook: prologue mismatch at {:#x}, skipping hook", target);
+        return;
+    }
+
+    // Allocate executable trampoline buffer
+    uint8_t* trampoline = static_cast<uint8_t*>(
+        VirtualAlloc(nullptr, 64, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE)
+    );
+    if (!trampoline) {
+        LOG_ERROR(Loader, "Utah branding hook: failed to allocate trampoline memory");
+        return;
+    }
+
+    // Copy stolen 17 bytes to trampoline
+    std::memcpy(trampoline, reinterpret_cast<const void*>(target), 17);
+
+    // Append 14-byte 64-bit indirect jump back to target + 17
+    trampoline[17] = 0xFF;
+    trampoline[18] = 0x25;
+    trampoline[19] = 0x00;
+    trampoline[20] = 0x00;
+    trampoline[21] = 0x00;
+    trampoline[22] = 0x00;
+    uint64_t ret_addr = static_cast<uint64_t>(target + 17);
+    std::memcpy(&trampoline[23], &ret_addr, sizeof(ret_addr));
+
+    FlushInstructionCache(GetCurrentProcess(), trampoline, 31);
+    s_orig_ui_insert = reinterpret_cast<UIInsertFn>(trampoline);
+
+    // Overwrite target with 14-byte 64-bit jump to Hook_UIInsert + 3 NOPs
+    DWORD old_protect;
+    if (!VirtualProtect(reinterpret_cast<void*>(target), 17, PAGE_EXECUTE_READWRITE, &old_protect)) {
+        LOG_ERROR(Loader, "Utah branding hook: VirtualProtect failed at target");
+        return;
+    }
+
+    uint8_t jump_code[17];
+    jump_code[0] = 0xFF;
+    jump_code[1] = 0x25;
+    jump_code[2] = 0x00;
+    jump_code[3] = 0x00;
+    jump_code[4] = 0x00;
+    jump_code[5] = 0x00;
+    uint64_t hook_addr = reinterpret_cast<uint64_t>(&Hook_UIInsert);
+    std::memcpy(&jump_code[6], &hook_addr, sizeof(hook_addr));
+    jump_code[14] = 0x90;
+    jump_code[15] = 0x90;
+    jump_code[16] = 0x90;
+
+    std::memcpy(reinterpret_cast<void*>(target), jump_code, sizeof(jump_code));
+    VirtualProtect(reinterpret_cast<void*>(target), 17, old_protect, &old_protect);
+    FlushInstructionCache(GetCurrentProcess(), reinterpret_cast<void*>(target), 17);
+
+    LOG_INFO(Loader, "Utah branding hook successfully installed at target {:#x} -> trampoline {:#x}",
+             target, reinterpret_cast<uintptr_t>(trampoline));
+#endif
+}
+
+
+// Copies guest memory without faulting. Returns false if part of the range is no longer mapped or readable;
+// `got` is then the number of bytes copied before the problem.
+static bool SafeReadMemory(VAddr src, void* dst, size_t size, size_t& got) {
+#ifdef _WIN32
+    SIZE_T copied = 0;
+    const BOOL ok = ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<LPCVOID>(src), dst, size, &copied);
+    got = static_cast<size_t>(copied);
+    return ok != FALSE;
+#else
+    std::memcpy(dst, reinterpret_cast<const void*>(src), size);
+    got = size;
+    return true;
+#endif
+}
+
+static bool ScanAndPatchUtahUniforms() {
+    auto* mem = Core::Memory::Instance();
+    if (!mem) return false;
+
+    static const uint8_t sig403[8] = {0x6e, 0x58, 0x40, 0x37, 0x28, 0x03, 0x01, 0x00};
+    static const uint8_t sig457[8] = {0x7e, 0x58, 0x40, 0x3f, 0x94, 0x03, 0x01, 0x00};
+    static const uint8_t sig635[8] = {0x7e, 0x58, 0x40, 0x3f, 0xf8, 0x04, 0x01, 0x00};
+
+    constexpr size_t stride_457 = (457 - 403) * 172;
+    constexpr size_t stride_635 = (635 - 403) * 172;
+    constexpr size_t required_span = stride_635 + 172;
+
+    bool patched = false;
+
+    // Searches one copied chunk and patches any match in the live memory it came from.
+    const auto scan_buffer = [&](const uint8_t* b, size_t n, VAddr addr0) {
+        if (n < required_span) return;
+        const uint8_t* const last = b + n - required_span;
+        for (const uint8_t* cur = b; cur <= last; ++cur) {
+            cur = static_cast<const uint8_t*>(std::memchr(cur, 0x6e, static_cast<size_t>(last - cur) + 1));
+            if (!cur) break;
+            if (std::memcmp(cur, sig403, 8) != 0 || std::memcmp(cur + stride_457, sig457, 8) != 0 ||
+                std::memcmp(cur + stride_635, sig635, 8) != 0) {
+                continue;
+            }
+            if (cur[8] == 0xf0 && cur[9] == 0x28 && cur[stride_457 + 8] == 0xf0 &&
+                cur[stride_457 + 9] == 0xe0 && cur[stride_635 + 8] == 0xf0 && cur[stride_635 + 9] == 0x28) {
+                patched = true;
+                continue;
+            }
+
+            uint8_t* target = reinterpret_cast<uint8_t*>(addr0 + static_cast<VAddr>(cur - b));
+            static const uint8_t patch403[2] = {0xf0, 0x28};
+            static const uint8_t patch457[2] = {0xf0, 0xe0};
+            static const uint8_t patch635[2] = {0xf0, 0x28};
+#ifdef _WIN32
+            DWORD old_protect;
+            if (VirtualProtect(target, required_span, PAGE_EXECUTE_READWRITE, &old_protect)) {
+                const HANDLE self = GetCurrentProcess();
+                SIZE_T written = 0;
+                const bool ok = WriteProcessMemory(self, target + 8, patch403, 2, &written) &&
+                                WriteProcessMemory(self, target + stride_457 + 8, patch457, 2, &written) &&
+                                WriteProcessMemory(self, target + stride_635 + 8, patch635, 2, &written);
+                VirtualProtect(target, required_span, old_protect, &old_protect);
+                if (ok) {
+                    LOG_INFO(Loader, "Utah uniform patch: successfully forced in-memory yUAn JOlt=120 at {:#x}",
+                             reinterpret_cast<uintptr_t>(target));
+                    patched = true;
+                }
+            }
+#else
+            std::memcpy(target + 8, patch403, 2);
+            std::memcpy(target + stride_457 + 8, patch457, 2);
+            std::memcpy(target + stride_635 + 8, patch635, 2);
+            patched = true;
+#endif
+        }
+    };
+
+    // Snapshot the mapped ranges and release the memory manager's lock before scanning.
+    // ForEachReadableRange keeps the lock shared for as long as its callback runs, and searching every
+    // mapped byte that way took about 0.9 s each round. The game maps, unmaps and protects guest memory
+    // constantly while it loads, and every one of those calls waited for the scan, so the whole game froze for
+    // 0.4-1.3 s about every 3 s. The ranges are read in chunks through SafeReadMemory instead, which fails
+    // without faulting if a range was unmapped after the snapshot.
+    std::vector<std::pair<VAddr, u64>> ranges;
+    mem->ForEachReadableRange([&](VAddr base, u64 size) {
+        if (size >= required_span) {
+            ranges.emplace_back(base, size);
+        }
+    });
+
+    constexpr size_t kChunk = 1u << 20;
+    std::vector<uint8_t> buf(kChunk);
+    for (const auto& [base, size] : ranges) {
+        u64 off = 0;
+        while (off + required_span <= size) {
+            const size_t want = static_cast<size_t>(std::min<u64>(kChunk, size - off));
+            size_t got = 0;
+            const bool ok = SafeReadMemory(base + off, buf.data(), want, got);
+            scan_buffer(buf.data(), got, base + off);
+            if (!ok) {
+                // Part of the chunk is unreadable now: carry on after the bad page.
+                off = ((base + off + got + 0x1000) & ~u64{0xfff}) - base;
+                continue;
+            }
+            if (off + want >= size) {
+                break;
+            }
+            // Overlap the next chunk so a match that straddles the boundary is still found.
+            off += want - required_span + 1;
+        }
+    }
+
+    return patched;
+}
+
+static void StartUtahUniformMonitor() {
+    static std::atomic<bool> s_monitor_started{false};
+    if (s_monitor_started.exchange(true)) {
+        return;
+    }
+    std::thread([]() {
+        for (int i = 0; i < 300; ++i) {
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+            ScanAndPatchUtahUniforms();
+        }
+    }).detach();
+}
+
 void OnGameLoaded() {
     std::filesystem::path patch_dir = Common::FS::GetUserPath(Common::FS::PathType::PatchesDir);
     if (!patch_file.empty()) {
@@ -273,6 +602,9 @@ void OnGameLoaded() {
         }
     }
     ApplyPendingPatches();
+    InstallUtahBrandingHook();
+    ScanAndPatchUtahUniforms();
+    StartUtahUniformMonitor();
 }
 
 void AddPatchToQueue(const patchInfo& patchToAdd) {

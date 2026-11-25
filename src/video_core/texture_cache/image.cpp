@@ -219,11 +219,32 @@ ImageView& Image::FindView(const ImageViewInfo& view_info, bool ensure_guest_sam
     return (*slot_image_views)[view_id];
 }
 
+// nhlport (Vulkan validation, SYNC-HAZARD-WRITE-AFTER-WRITE): a fresh image starts with no
+// tracked access, but the memory may still have a copy write from its previous owner in flight.
+// Make the first transition wait for any prior write.
+static vk::AccessFlags2 SrcAccessOrAny(vk::AccessFlags2 access) {
+    return access ? access : vk::AccessFlags2{vk::AccessFlagBits2::eMemoryWrite};
+}
+
 void Image::GetBarriers(Barriers& barriers, vk::ImageLayout dst_layout, vk::AccessFlags2 dst_mask,
                         vk::PipelineStageFlags2 dst_stage,
                         std::optional<SubresourceRange> subres_range) {
     auto& last_state = backing->state;
     auto& subresource_states = backing->subresource_states;
+
+    // nhlport: the image may have fewer mips than a T# view asks for (ImageInfo::UpdateSize
+    // drops mips past the full chain), so keep the requested range inside the image.
+    if (subres_range) {
+        auto& r = *subres_range;
+        const u32 levels = std::max<u32>(info.resources.levels, 1u);
+        const u32 layers = std::max<u32>(info.resources.layers, 1u);
+        r.base.level = static_cast<u16>(std::min<u32>(r.base.level, levels - 1));
+        r.extent.levels =
+            static_cast<u16>(std::clamp<u32>(r.extent.levels, 1u, levels - r.base.level));
+        r.base.layer = static_cast<u16>(std::min<u32>(r.base.layer, layers - 1));
+        r.extent.layers =
+            static_cast<u16>(std::clamp<u32>(r.extent.layers, 1u, layers - r.base.layer));
+    }
 
     const bool needs_partial_transition =
         subres_range &&
@@ -262,7 +283,7 @@ void Image::GetBarriers(Barriers& barriers, vk::ImageLayout dst_layout, vk::Acce
                 if (state.layout != dst_layout || state.access_mask != dst_mask || is_write) {
                     barriers.emplace_back(vk::ImageMemoryBarrier2{
                         .srcStageMask = state.pl_stage,
-                        .srcAccessMask = state.access_mask,
+                        .srcAccessMask = SrcAccessOrAny(state.access_mask),
                         .dstStageMask = dst_stage,
                         .dstAccessMask = dst_mask,
                         .oldLayout = state.layout,
@@ -298,7 +319,7 @@ void Image::GetBarriers(Barriers& barriers, vk::ImageLayout dst_layout, vk::Acce
         }
         barriers.emplace_back(vk::ImageMemoryBarrier2{
             .srcStageMask = last_state.pl_stage,
-            .srcAccessMask = last_state.access_mask,
+            .srcAccessMask = SrcAccessOrAny(last_state.access_mask),
             .dstStageMask = dst_stage,
             .dstAccessMask = dst_mask,
             .oldLayout = last_state.layout,
